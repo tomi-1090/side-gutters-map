@@ -7,6 +7,8 @@ import 'dart:convert';
 import 'package:web/web.dart' as web;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:math' as math;
+import 'package:http/http.dart' as http;   // URL読み込み用
+
 void main() {
   runApp(const MyApp());
 }
@@ -23,16 +25,14 @@ class MyApp extends StatelessWidget {
   }
 }
 
-// ==================== レイヤー管理クラス ====================
+// ==================== GutterLayer / Gutter ====================
 class GutterLayer {
   String id;
   String name;
   bool visible;
   List<Gutter> gutters;
-
-  // ★ 新規追加：カテゴリ分類スタイル
-  String? categoryKey;                    // 分類に使う属性キー
-  Map<String, Color> categoryColors = {}; // カテゴリ値 → 色
+  String? categoryKey;
+  Map<String, Color> categoryColors = {};
 
   GutterLayer({
     required this.id,
@@ -43,7 +43,6 @@ class GutterLayer {
     Map<String, Color>? categoryColors,
   }) : categoryColors = categoryColors ?? {};
 
-  // 保存用
   Map<String, dynamic> toJson() {
     return {
       'id': id,
@@ -83,10 +82,9 @@ class Gutter {
   Color color;
   List<LatLng> points;
   Map<String, dynamic> properties;
-  
   bool showArrow;
   double arrowSize;
-  double strokeWidth;        // ← 新規追加
+  double strokeWidth;
 
   Gutter({
     required this.id,
@@ -96,7 +94,7 @@ class Gutter {
     Map<String, dynamic>? properties,
     this.showArrow = false,
     this.arrowSize = 12.0,
-    this.strokeWidth = 7.5,          // デフォルト
+    this.strokeWidth = 7.5,
   }) : color = color ?? Colors.blue,
        properties = properties ?? {};
 
@@ -108,7 +106,7 @@ class Gutter {
         'properties': properties,
         'showArrow': showArrow,
         'arrowSize': arrowSize,
-        'strokeWidth': strokeWidth,       // ← 追加
+        'strokeWidth': strokeWidth,
       };
 
   factory Gutter.fromJson(Map<String, dynamic> json) {
@@ -122,10 +120,11 @@ class Gutter {
       properties: Map<String, dynamic>.from(json['properties'] ?? {}),
       showArrow: json['showArrow'] as bool? ?? false,
       arrowSize: (json['arrowSize'] as num?)?.toDouble() ?? 12.0,
-      strokeWidth: (json['strokeWidth'] as num?)?.toDouble() ?? 7.5,   // ← 追加
+      strokeWidth: (json['strokeWidth'] as num?)?.toDouble() ?? 7.5,
     );
   }
 }
+
 class MapPage extends StatefulWidget {
   const MapPage({super.key});
   @override
@@ -137,26 +136,111 @@ class _MapPageState extends State<MapPage> {
   final Distance distanceCalculator = const Distance();
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
-  List<Gutter> gutters = [];
+  List<GutterLayer> layers = [];
+  int? selectedLayerIndex;
+
   bool isAddingNew = false;
   List<LatLng> newPoints = [];
   bool isCutting = false;
   int newGutterCounter = 1;
 
-  // タイルレイヤー
-  String currentTile = 'osm'; // osm, gsi_std, gsi_pale, gsi_photo
-
-    // レイヤー管理
-  List<GutterLayer> layers = [];
-  int? selectedLayerIndex;   // 現在編集中のレイヤー
+  String currentTile = 'osm';
 
   @override
   void initState() {
     super.initState();
     _loadFromLocalStorage();
+
+    // URLパラメータから自動読み込み
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final uri = Uri.parse(web.window.location.href);
+      final geojsonUrl = uri.queryParameters['geojson'];
+      if (geojsonUrl != null && geojsonUrl.isNotEmpty) {
+        _loadGeoJSONFromUrl(geojsonUrl);
+      }
+    });
   }
 
-   String getTileUrl() {
+  // ==================== URLからGeoJSON読み込み（新規追加） ====================
+  Future<void> _loadGeoJSONFromUrl(String url) async {
+    try {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('GeoJSONを読み込み中...')),
+        );
+      }
+
+      final response = await http.get(Uri.parse(url));
+      if (response.statusCode != 200) {
+        throw Exception('HTTP ${response.statusCode}');
+      }
+
+      final data = jsonDecode(utf8.decode(response.bodyBytes));
+      final features = data['features'] as List<dynamic>? ?? [];
+
+      final List<Gutter> loadedGutters = [];
+
+      for (var f in features) {
+        final geometry = f['geometry'];
+        if (geometry == null) continue;
+
+        List<dynamic> allCoords = [];
+        if (geometry['type'] == 'MultiLineString') {
+          for (var line in geometry['coordinates'] as List) {
+            allCoords.addAll(line as List<dynamic>);
+          }
+        } else if (geometry['type'] == 'LineString') {
+          allCoords = geometry['coordinates'] as List<dynamic>;
+        } else {
+          continue;
+        }
+
+        final points = allCoords
+            .map((coord) => LatLng((coord[1] as num).toDouble(), (coord[0] as num).toDouble()))
+            .toList();
+
+        if (points.length < 2) continue;
+
+        final props = f['properties'] ?? {};
+        loadedGutters.add(Gutter(
+          id: props['id']?.toString() ?? 'SG-${DateTime.now().millisecondsSinceEpoch}',
+          name: props['name']?.toString() ?? '',
+          points: points,
+          color: props['color'] != null ? Color(props['color'] as int) : Colors.blue,
+          strokeWidth: (props['strokeWidth'] as num?)?.toDouble() ?? 7.5,
+          showArrow: props['showArrow'] as bool? ?? false,
+          properties: Map<String, dynamic>.from(props),
+        ));
+      }
+
+      if (loadedGutters.isEmpty) return;
+
+      setState(() {
+        layers.add(GutterLayer(
+          id: DateTime.now().millisecondsSinceEpoch.toString(),
+          name: "URL読み込み ${layers.length + 1}",
+          gutters: loadedGutters,
+        ));
+      });
+
+      _showAllGutters();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${loadedGutters.length}本のラインを読み込みました')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('読み込み失敗: $e')),
+        );
+      }
+    }
+  }
+
+  // ==================== 以下はあなたの元のコードをそのまま使用 ====================
+  String getTileUrl() {
     switch (currentTile) {
       case 'gsi_photo':
         return 'https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg';
@@ -165,35 +249,30 @@ class _MapPageState extends State<MapPage> {
     }
   }
 
-  String getTileName() {
-    return currentTile == 'gsi_photo' ? '航空写真' : 'OpenStreetMap';
-  }
-
-    // ==================== 自動保存（layers対応） ====================
-    Future<void> _saveToLocalStorage() async {
+  Future<void> _saveToLocalStorage() async {
     final prefs = await SharedPreferences.getInstance();
     final layersData = layers.map((layer) => layer.toJson()).toList();
     await prefs.setString('layers_data', jsonEncode(layersData));
   }
 
-    Future<void> _loadFromLocalStorage() async {
-  final prefs = await SharedPreferences.getInstance();
-  final String? data = prefs.getString('layers_data');
+  Future<void> _loadFromLocalStorage() async {
+    final prefs = await SharedPreferences.getInstance();
+    final String? data = prefs.getString('layers_data');
 
-  if (data != null && data.isNotEmpty) {
-    try {
-      final List<dynamic> layersJson = jsonDecode(data);
-      setState(() {
-        layers.clear();
-        for (var layerJson in layersJson) {
-          layers.add(GutterLayer.fromJson(layerJson as Map<String, dynamic>));
-        }
-      });
-    } catch (e) {
-      debugPrint('レイヤー読み込みエラー: $e');
+    if (data != null && data.isNotEmpty) {
+      try {
+        final List<dynamic> layersJson = jsonDecode(data);
+        setState(() {
+          layers.clear();
+          for (var layerJson in layersJson) {
+            layers.add(GutterLayer.fromJson(layerJson as Map<String, dynamic>));
+          }
+        });
+      } catch (e) {
+        debugPrint('レイヤー読み込みエラー: $e');
+      }
     }
   }
-}
 
         // ==================== GeoJSON 読み込み ====================
   Future<void> _loadGeoJSON() async {
@@ -1061,11 +1140,10 @@ class _MapPageState extends State<MapPage> {
     );
   }
 
-  @override
+@override
   Widget build(BuildContext context) {
     return Scaffold(
-      key: _scaffoldKey,                    // ← ここを追加
-      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+      key: _scaffoldKey,
       appBar: AppBar(
         title: Text(isAddingNew ? '新規追加モード' : isCutting ? '切断モード' : '側溝踏査マップ'),
         backgroundColor: isAddingNew ? Colors.orange : isCutting ? Colors.purple : Colors.blue,
@@ -1078,22 +1156,16 @@ class _MapPageState extends State<MapPage> {
               const PopupMenuItem(value: 'gsi_photo', child: Text('航空写真')),
             ],
           ),
-          const SizedBox(width: 8),
-
-          // 修正版アイコン
           IconButton(
             icon: const Icon(Icons.menu),
-            tooltip: 'レイヤー管理',
-            onPressed: () {
-              _scaffoldKey.currentState?.openEndDrawer();   // ← ここを修正
-            },
+            onPressed: () => _scaffoldKey.currentState?.openEndDrawer(),
           ),
         ],
       ),
       body: FlutterMap(
         mapController: mapController,
         options: MapOptions(
-          initialCenter: LatLng(36.555, 139.882),
+          initialCenter: const LatLng(36.555, 139.882),
           initialZoom: 17.0,
           onTap: _addPoint,
         ),
@@ -1208,6 +1280,36 @@ class _MapPageState extends State<MapPage> {
           FloatingActionButton(heroTag: "load", onPressed: _loadGeoJSON, child: const Icon(Icons.upload_file)),
           const SizedBox(height: 8),
           FloatingActionButton(heroTag: "export", onPressed: _exportGeoJSON, child: const Icon(Icons.download)),
+          FloatingActionButton(
+            heroTag: "url_load",
+            onPressed: () {
+              final controller = TextEditingController();
+              showDialog(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('GeoJSON URLから読み込み'),
+                  content: TextField(
+                    controller: controller,
+                    decoration: const InputDecoration(hintText: 'https://gist.githubusercontent.com/...'),
+                    maxLines: 3,
+                  ),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('キャンセル')),
+                    TextButton(
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        if (controller.text.trim().isNotEmpty) {
+                          _loadGeoJSONFromUrl(controller.text.trim());
+                        }
+                      },
+                      child: const Text('読み込み'),
+                    ),
+                  ],
+                ),
+              );
+            },
+            child: const Icon(Icons.link),
+          ),
         ],
       ),
     );
