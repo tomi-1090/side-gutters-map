@@ -8,6 +8,7 @@ import 'package:web/web.dart' as web;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:math' as math;
 import 'package:http/http.dart' as http;   // URL読み込み用
+import 'package:flutter/services.dart';
 
 void main() {
   runApp(const MyApp());
@@ -239,6 +240,77 @@ class _MapPageState extends State<MapPage> {
     }
   }
 
+  // ==================== GeoJSON共有URL生成 ====================
+  void _generateShareUrl() {
+    final controller = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('GeoJSON共有URL生成'),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(
+            hintText: 'https://raw.githubusercontent.com/...',
+          ),
+          maxLines: 3,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('キャンセル'),
+          ),
+          TextButton(
+            onPressed: () async {
+              final geojsonUrl = controller.text.trim();
+
+              if (geojsonUrl.isEmpty) return;
+
+              // 現在のVercel URL取得
+              final baseUrl =
+                  '${web.window.location.origin}${web.window.location.pathname}';
+
+              // geojson パラメータ付きURL生成
+              final shareUrl =
+                  '$baseUrl?geojson=${Uri.encodeComponent(geojsonUrl)}';
+
+              // クリップボードへコピー
+              await Clipboard.setData(
+                ClipboardData(text: shareUrl),
+              );
+
+              Navigator.pop(ctx);
+
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('共有URLをコピーしました'),
+                  ),
+                );
+              }
+
+              // URL表示ダイアログ
+              showDialog(
+                context: context,
+                builder: (_) => AlertDialog(
+                  title: const Text('共有URL'),
+                  content: SelectableText(shareUrl),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('閉じる'),
+                    ),
+                  ],
+                ),
+              );
+            },
+            child: const Text('生成'),
+          ),
+        ],
+      ),
+    );
+  }
+
   // ==================== 以下はあなたの元のコードをそのまま使用 ====================
   String getTileUrl() {
     switch (currentTile) {
@@ -427,6 +499,87 @@ class _MapPageState extends State<MapPage> {
       }
     }
   }
+
+  Future<void> _uploadCurrentLayer() async {
+  try {
+    final currentLayer = _currentLayer;
+
+    if (currentLayer == null) return;
+
+    final features = currentLayer.gutters.map((g) {
+      return {
+        "type": "Feature",
+        "geometry": {
+          "type": "LineString",
+          "coordinates":
+              g.points.map((p) => [p.longitude, p.latitude]).toList(),
+        },
+        "properties": {
+          "id": g.id,
+          "name": g.name,
+          ...g.properties,
+        },
+      };
+    }).toList();
+
+    final geojson = {
+      "type": "FeatureCollection",
+      "features": features,
+    };
+
+    final uri = Uri.parse('/api/uploadGeoJson');
+
+    final response = await http.post(
+      uri,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({
+        'geojson': geojson,
+      }),
+    );
+
+    final data = jsonDecode(response.body);
+
+    if (response.statusCode != 200) {
+      throw Exception(data.toString());
+    }
+
+    final rawUrl = data['rawUrl'];
+
+    // 共有URL
+    final shareUrl =
+        '${web.window.location.origin}'
+        '?geojson=${Uri.encodeComponent(rawUrl)}';
+
+    await Clipboard.setData(
+      ClipboardData(text: shareUrl),
+    );
+
+    if (mounted) {
+      showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('アップロード完了'),
+          content: SelectableText(shareUrl),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('閉じる'),
+            ),
+          ],
+        ),
+      );
+    }
+
+  } catch (e) {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('アップロード失敗: $e')),
+      );
+    }
+  }
+}
 
   // ==================== モード切り替え ====================
   void _toggleAddMode() {
@@ -1308,7 +1461,21 @@ class _MapPageState extends State<MapPage> {
                 ),
               );
             },
+            
             child: const Icon(Icons.link),
+          ),
+          const SizedBox(height: 8),
+          FloatingActionButton(
+            heroTag: "share_url",
+            onPressed: _generateShareUrl,
+            child: const Icon(Icons.share),
+          ),
+
+          const SizedBox(height: 8),
+          FloatingActionButton(
+            heroTag: "upload",
+            onPressed: _uploadCurrentLayer,
+            child: const Icon(Icons.cloud_upload),
           ),
         ],
       ),
