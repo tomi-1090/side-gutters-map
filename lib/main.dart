@@ -80,9 +80,17 @@ class GutterLayer {
 class Gutter {
   String id;
   String name;
+
+  // 新規追加
+  String shape;
+  String diameter;
+  String memo;
+  bool flowReversed;
+
   Color color;
   List<LatLng> points;
   Map<String, dynamic> properties;
+
   bool showArrow;
   double arrowSize;
   double strokeWidth;
@@ -90,20 +98,37 @@ class Gutter {
   Gutter({
     required this.id,
     this.name = '',
+
+    // 新規追加
+    this.shape = 'open',
+    this.diameter = '300×300',
+    this.memo = '',
+    this.flowReversed = false,
+
     required this.points,
     Color? color,
     Map<String, dynamic>? properties,
+
     this.showArrow = false,
     this.arrowSize = 12.0,
     this.strokeWidth = 7.5,
-  }) : color = color ?? Colors.blue,
-       properties = properties ?? {};
+  })  : color = color ?? Colors.blue,
+        properties = properties ?? {};
 
   Map<String, dynamic> toJson() => {
         'id': id,
         'name': name,
+
+        // 新規追加
+        'shape': shape,
+        'diameter': diameter,
+        'memo': memo,
+        'flowReversed': flowReversed,
+
         'color': color.toARGB32(),
-        'points': points.map((p) => [p.longitude, p.latitude]).toList(),
+        'points': points
+            .map((p) => [p.longitude, p.latitude])
+            .toList(),
         'properties': properties,
         'showArrow': showArrow,
         'arrowSize': arrowSize,
@@ -114,14 +139,37 @@ class Gutter {
     return Gutter(
       id: json['id']?.toString() ?? '',
       name: json['name']?.toString() ?? '',
-      color: Color(json['color'] as int? ?? Colors.blue.toARGB32()),
+
+      // 新規追加
+      shape: json['shape']?.toString() ?? 'open',
+      diameter: json['diameter']?.toString() ?? '300×300',
+      memo: json['memo']?.toString() ?? '',
+      flowReversed: json['flowReversed'] as bool? ?? false,
+
+      color: Color(
+        json['color'] as int? ?? Colors.blue.toARGB32(),
+      ),
+
       points: (json['points'] as List<dynamic>)
-          .map((e) => LatLng((e[1] as num).toDouble(), (e[0] as num).toDouble()))
+          .map(
+            (e) => LatLng(
+              (e[1] as num).toDouble(),
+              (e[0] as num).toDouble(),
+            ),
+          )
           .toList(),
-      properties: Map<String, dynamic>.from(json['properties'] ?? {}),
+
+      properties: Map<String, dynamic>.from(
+        json['properties'] ?? {},
+      ),
+
       showArrow: json['showArrow'] as bool? ?? false,
-      arrowSize: (json['arrowSize'] as num?)?.toDouble() ?? 12.0,
-      strokeWidth: (json['strokeWidth'] as num?)?.toDouble() ?? 7.5,
+
+      arrowSize:
+          (json['arrowSize'] as num?)?.toDouble() ?? 12.0,
+
+      strokeWidth:
+          (json['strokeWidth'] as num?)?.toDouble() ?? 7.5,
     );
   }
 }
