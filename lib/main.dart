@@ -1389,10 +1389,52 @@ void _generateShareUrl() {
                           tooltip: 'カテゴリ色分け設定',
                           onPressed: () => _showCategoryStylingDialog(index),
                         ),
+
                         IconButton(
                           icon: const Icon(Icons.edit),
+                          tooltip: 'レイヤー名変更',
                           onPressed: () => _renameLayer(index),
                         ),
+
+                        IconButton(
+                          icon: const Icon(Icons.delete),
+                          tooltip: 'レイヤー削除',
+                          onPressed: () {
+                            showDialog(
+                              context: context,
+                              builder: (_) => AlertDialog(
+                                title: const Text('レイヤー削除'),
+                                content: Text(
+                                  '「${layer.name}」を削除しますか？',
+                                ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () => Navigator.pop(context),
+                                    child: const Text('キャンセル'),
+                                  ),
+                                  TextButton(
+                                    onPressed: () {
+                                      setState(() {
+                                        layers.removeAt(index);
+
+                                        // 選択中レイヤー調整
+                                        if (selectedLayerIndex != null &&
+                                            selectedLayerIndex! >= layers.length) {
+                                          selectedLayerIndex = layers.isEmpty
+                                            ? null
+                                            : layers.length - 1;
+                                        }
+                                      });
+
+                                      Navigator.pop(context);
+                                    },
+                                    child: const Text('削除'),
+                                    ),
+                                ]
+                              )
+                            );
+                          }
+                        )
                       ],
                     ),
                   );
