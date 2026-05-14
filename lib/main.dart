@@ -7,33 +7,66 @@ import 'dart:convert';
 import 'package:web/web.dart' as web;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:math' as math;
-import 'package:http/http.dart' as http;   // URL読み込み用
+import 'package:http/http.dart' as http;
 import 'package:flutter/services.dart';
 
-void main() {
-  runApp(const MyApp());
-}
+void main() => runApp(const MyApp());
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
+
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
+    return const MaterialApp(
       title: '側溝踏査マップ',
-      home: const MapPage(),
+      home: MapPage(),
       debugShowCheckedModeBanner: false,
     );
   }
 }
 
-// ==================== GutterLayer / Gutter ====================
+// ================================================================
+// 定数
+// ================================================================
+
+/// タイルURL一覧（currentTile をキーにして引く）
+const _kTileUrls = {
+  'osm': 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+  'gsi_photo':
+      'https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg',
+};
+
+/// ライン色パレット（編集フォームで選択）
+const _kColorPalette = [
+  Colors.blue, Colors.red, Colors.green, Colors.orange,
+  Colors.purple, Colors.teal, Colors.brown, Colors.grey,
+];
+
+/// 断面形状の選択肢と表示ラベル
+const _kShapeOptions = ['open', 'box', 'circle', 'other'];
+const _kShapeLabels = {
+  'open': '開渠', 'box': 'BOX', 'circle': '円形', 'other': 'その他',
+};
+
+/// 口径の選択肢
+const _kDiameterOptions = [
+  '300×300', '400×400', '500×500', '600×600',
+  '700×700', '800×800', '900×900', '1000×1000',
+  '300×400', '400×500', '500×600',
+];
+
+// ================================================================
+// データモデル
+// ================================================================
+
+/// レイヤー: 複数のGutterをまとめる単位。カテゴリ色分けも管理する。
 class GutterLayer {
   String id;
   String name;
   bool visible;
   List<Gutter> gutters;
-  String? categoryKey;
-  Map<String, Color> categoryColors = {};
+  String? categoryKey;       // 色分けに使うプロパティキー（null = 個別色）
+  Map<String, Color> categoryColors;
 
   GutterLayer({
     required this.id,
@@ -44,71 +77,54 @@ class GutterLayer {
     Map<String, Color>? categoryColors,
   }) : categoryColors = categoryColors ?? {};
 
-  Map<String, dynamic> toJson() {
-    return {
-      'id': id,
-      'name': name,
-      'visible': visible,
-      'gutters': gutters.map((g) => g.toJson()).toList(),
-      'categoryKey': categoryKey,
-      'categoryColors': categoryColors.map((k, v) => MapEntry(k, v.toARGB32())),
-    };
-  }
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'visible': visible,
+        'gutters': gutters.map((g) => g.toJson()).toList(),
+        'categoryKey': categoryKey,
+        'categoryColors':
+            categoryColors.map((k, v) => MapEntry(k, v.toARGB32())),
+      };
 
-  factory GutterLayer.fromJson(Map<String, dynamic> json) {
-    final guttersJson = json['gutters'] as List<dynamic>? ?? [];
-    final gutters = guttersJson.map((g) => Gutter.fromJson(g as Map<String, dynamic>)).toList();
-
-    final catColors = <String, Color>{};
-    if (json['categoryColors'] != null) {
-      (json['categoryColors'] as Map<String, dynamic>).forEach((k, v) {
-        catColors[k] = Color(v as int);
-      });
-    }
-
-    return GutterLayer(
-      id: json['id']?.toString() ?? '',
-      name: json['name']?.toString() ?? '',
-      visible: json['visible'] ?? true,
-      gutters: gutters,
-      categoryKey: json['categoryKey']?.toString(),
-      categoryColors: catColors,
-    );
-  }
+  factory GutterLayer.fromJson(Map<String, dynamic> json) => GutterLayer(
+        id: json['id']?.toString() ?? '',
+        name: json['name']?.toString() ?? '',
+        visible: json['visible'] ?? true,
+        gutters: (json['gutters'] as List<dynamic>? ?? [])
+            .map((g) => Gutter.fromJson(g as Map<String, dynamic>))
+            .toList(),
+        categoryKey: json['categoryKey']?.toString(),
+        categoryColors: (json['categoryColors'] as Map<String, dynamic>? ?? {})
+            .map((k, v) => MapEntry(k, Color(v as int))),
+      );
 }
 
+/// 側溝1本分のデータ。座標列・表示スタイル・属性情報を保持する。
 class Gutter {
   String id;
   String name;
-
-  // 新規追加
-  String shape;
-  String diameter;
-  String memo;
-  bool flowReversed;
-
+  String shape;         // 断面形状（open / box / circle / other）
+  String diameter;      // 口径（例: 300×300）
+  String memo;          // 現地メモ
+  bool flowReversed;    // 流向反転フラグ
   Color color;
   List<LatLng> points;
-  Map<String, dynamic> properties;
-
-  bool showArrow;
-  double arrowSize;
-  double strokeWidth;
+  Map<String, dynamic> properties; // GeoJSONの元プロパティをそのまま保持
+  bool showArrow;       // 流向矢印を表示するか
+  double arrowSize;     // 矢印サイズ（メートル）
+  double strokeWidth;   // ラインの太さ（px）
 
   Gutter({
     required this.id,
     this.name = '',
-
-    // 新規追加
     this.shape = 'open',
     this.diameter = '300×300',
     this.memo = '',
     this.flowReversed = false,
-
     required this.points,
     Color? color,
     Map<String, dynamic>? properties,
-
     this.showArrow = false,
     this.arrowSize = 12.0,
     this.strokeWidth = 7.5,
@@ -118,72 +134,52 @@ class Gutter {
   Map<String, dynamic> toJson() => {
         'id': id,
         'name': name,
-
-        // 新規追加
         'shape': shape,
         'diameter': diameter,
         'memo': memo,
         'flowReversed': flowReversed,
-
         'color': color.toARGB32(),
-        'points': points
-            .map((p) => [p.longitude, p.latitude])
-            .toList(),
+        'points': points.map((p) => [p.longitude, p.latitude]).toList(),
         'properties': properties,
         'showArrow': showArrow,
         'arrowSize': arrowSize,
         'strokeWidth': strokeWidth,
       };
 
-  factory Gutter.fromJson(Map<String, dynamic> json) {
-    return Gutter(
-      id: json['id']?.toString() ?? '',
-      name: json['name']?.toString() ?? '',
-
-      // 新規追加
-      shape: json['shape']?.toString() ?? 'open',
-      diameter: json['diameter']?.toString() ?? '300×300',
-      memo: json['memo']?.toString() ?? '',
-      flowReversed: json['flowReversed'] as bool? ?? false,
-
-      color: Color(
-        json['color'] as int? ?? Colors.blue.toARGB32(),
-      ),
-
-      points: (json['points'] as List<dynamic>)
-          .map(
-            (e) => LatLng(
-              (e[1] as num).toDouble(),
-              (e[0] as num).toDouble(),
-            ),
-          )
-          .toList(),
-
-      properties: Map<String, dynamic>.from(
-        json['properties'] ?? {},
-      ),
-
-      showArrow: json['showArrow'] as bool? ?? false,
-
-      arrowSize:
-          (json['arrowSize'] as num?)?.toDouble() ?? 12.0,
-
-      strokeWidth:
-          (json['strokeWidth'] as num?)?.toDouble() ?? 7.5,
-    );
-  }
+  factory Gutter.fromJson(Map<String, dynamic> json) => Gutter(
+        id: json['id']?.toString() ?? '',
+        name: json['name']?.toString() ?? '',
+        shape: json['shape']?.toString() ?? 'open',
+        diameter: json['diameter']?.toString() ?? '300×300',
+        memo: json['memo']?.toString() ?? '',
+        flowReversed: json['flowReversed'] as bool? ?? false,
+        color: Color(json['color'] as int? ?? Colors.blue.toARGB32()),
+        points: (json['points'] as List<dynamic>)
+            .map((e) => LatLng(
+                (e[1] as num).toDouble(), (e[0] as num).toDouble()))
+            .toList(),
+        properties: Map<String, dynamic>.from(json['properties'] ?? {}),
+        showArrow: json['showArrow'] as bool? ?? false,
+        arrowSize: (json['arrowSize'] as num?)?.toDouble() ?? 12.0,
+        strokeWidth: (json['strokeWidth'] as num?)?.toDouble() ?? 7.5,
+      );
 }
+
+// ================================================================
+// ページ
+// ================================================================
 
 class MapPage extends StatefulWidget {
   const MapPage({super.key});
+
   @override
   State<MapPage> createState() => _MapPageState();
 }
 
 class _MapPageState extends State<MapPage> {
-  final MapController mapController = MapController();
-  final Distance distanceCalculator = const Distance();
-  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  final _mapController = MapController();
+  final _distance = const Distance();
+  final _scaffoldKey = GlobalKey<ScaffoldState>();
 
   List<GutterLayer> layers = [];
   int? selectedLayerIndex;
@@ -191,7 +187,7 @@ class _MapPageState extends State<MapPage> {
   bool isAddingNew = false;
   List<LatLng> newPoints = [];
   bool isCutting = false;
-  int newGutterCounter = 1;
+  int _newGutterCounter = 1;
 
   String currentTile = 'osm';
 
@@ -200,413 +196,255 @@ class _MapPageState extends State<MapPage> {
     super.initState();
     _loadFromLocalStorage();
 
-    // URLパラメータから自動読み込み
+    // 起動時にURLパラメータ ?geojson=... があれば自動読み込み
     WidgetsBinding.instance.addPostFrameCallback((_) {
-            final geojsonUrl =     Uri.decodeComponent(Uri.base.queryParameters['geojson'] ?? '',);
-              _loadGeoJSONFromUrl(geojsonUrl);
-              http.get(
-                Uri.parse(geojsonUrl),
-                );
-      });
-    }
+      final url =
+          Uri.decodeComponent(Uri.base.queryParameters['geojson'] ?? '');
+      if (url.isNotEmpty) _loadGeoJSONFromUrl(url);
+    });
+  }
 
-  // ==================== URLからGeoJSON読み込み（新規追加） ====================
-  Future<void> _loadGeoJSONFromUrl(String url) async {
+  // ================================================================
+  // ローカルストレージ
+  // ================================================================
+
+  Future<void> _saveToLocalStorage() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+        'layers_data', jsonEncode(layers.map((l) => l.toJson()).toList()));
+  }
+
+  Future<void> _loadFromLocalStorage() async {
+    final prefs = await SharedPreferences.getInstance();
+    final data = prefs.getString('layers_data');
+    if (data == null || data.isEmpty) return;
     try {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('GeoJSONを読み込み中...')),
-        );
+      setState(() {
+        layers = (jsonDecode(data) as List<dynamic>)
+            .map((j) => GutterLayer.fromJson(j as Map<String, dynamic>))
+            .toList();
+      });
+    } catch (e) {
+      debugPrint('レイヤー読み込みエラー: $e');
+    }
+  }
+
+  // ================================================================
+  // GeoJSON パース（共通ロジック）
+  // ================================================================
+
+  /// GeoJSONのfeatures配列からGutterリストを生成する共通処理。
+  /// LineString / MultiLineString のみ対象。2点未満はスキップ。
+  List<Gutter> _parseGeoJsonFeatures(List<dynamic> features) {
+    final gutters = <Gutter>[];
+    for (final f in features) {
+      final geometry = f['geometry'];
+      if (geometry == null) continue;
+
+      // MultiLineStringは全セグメントを結合して1本として扱う
+      final List<dynamic> allCoords;
+      if (geometry['type'] == 'MultiLineString') {
+        allCoords = (geometry['coordinates'] as List)
+            .expand((line) => line as List<dynamic>)
+            .toList();
+      } else if (geometry['type'] == 'LineString') {
+        allCoords = geometry['coordinates'] as List<dynamic>;
+      } else {
+        continue;
       }
 
+      final points = allCoords
+          .map((c) =>
+              LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble()))
+          .toList();
+      if (points.length < 2) continue;
+
+      final props = f['properties'] ?? {};
+      gutters.add(Gutter(
+        id: props['id']?.toString() ??
+            props['ID']?.toString() ??
+            'SG-${DateTime.now().millisecondsSinceEpoch}',
+        name: props['name']?.toString() ??
+            props['名称']?.toString() ??
+            props['Name']?.toString() ??
+            '',
+        points: points,
+        color: props['color'] != null
+            ? Color(props['color'] as int)
+            : Colors.blue,
+        strokeWidth: (props['strokeWidth'] as num?)?.toDouble() ?? 7.5,
+        showArrow: props['showArrow'] as bool? ?? false,
+        properties: Map<String, dynamic>.from(props),
+      ));
+    }
+    return gutters;
+  }
+
+  /// パース結果をレイヤーとして追加する共通処理
+  void _addParsedLayer(List<Gutter> gutters, String name) {
+    if (gutters.isEmpty) return;
+    setState(() {
+      layers.add(GutterLayer(
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
+        name: name,
+        gutters: gutters,
+      ));
+    });
+    _showAllGutters();
+  }
+
+  // ================================================================
+  // GeoJSON 読み込み（ファイル）
+  // ================================================================
+
+  Future<void> _loadGeoJSON() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['geojson', 'json'],
+        allowMultiple: false,
+      );
+      if (result == null || result.files.isEmpty) return;
+
+      final file = result.files.first;
+      final data = jsonDecode(utf8.decode(file.bytes!));
+      final gutters =
+          _parseGeoJsonFeatures(data['features'] as List<dynamic>? ?? []);
+
+      if (gutters.isEmpty) {
+        _showSnackBar('有効なラインがありませんでした');
+        return;
+      }
+
+      final layerName = 'レイヤー ${layers.length + 1} - ${file.name}';
+      _addParsedLayer(gutters, layerName);
+      _showSnackBar('${gutters.length}件を「$layerName」に追加しました');
+
+      // 読み込み後、Drawerを開いてレイヤーを確認しやすくする
+      Future.delayed(const Duration(milliseconds: 300), () {
+        if (mounted) _scaffoldKey.currentState?.openEndDrawer();
+      });
+    } catch (e) {
+      debugPrint('読み込みエラー: $e');
+      _showSnackBar('読み込みエラー: $e');
+    }
+  }
+
+  // ================================================================
+  // GeoJSON 読み込み（URL）
+  // ================================================================
+
+  Future<void> _loadGeoJSONFromUrl(String url) async {
+    if (url.isEmpty) return;
+    try {
+      _showSnackBar('GeoJSONを読み込み中...');
       final response = await http.get(Uri.parse(url));
       if (response.statusCode != 200) {
         throw Exception('HTTP ${response.statusCode}');
       }
 
       final data = jsonDecode(utf8.decode(response.bodyBytes));
-      final features = data['features'] as List<dynamic>? ?? [];
+      final gutters =
+          _parseGeoJsonFeatures(data['features'] as List<dynamic>? ?? []);
 
-      final List<Gutter> loadedGutters = [];
-
-      for (var f in features) {
-        final geometry = f['geometry'];
-        if (geometry == null) continue;
-
-        List<dynamic> allCoords = [];
-        if (geometry['type'] == 'MultiLineString') {
-          for (var line in geometry['coordinates'] as List) {
-            allCoords.addAll(line as List<dynamic>);
-          }
-        } else if (geometry['type'] == 'LineString') {
-          allCoords = geometry['coordinates'] as List<dynamic>;
-        } else {
-          continue;
-        }
-
-        final points = allCoords
-            .map((coord) => LatLng((coord[1] as num).toDouble(), (coord[0] as num).toDouble()))
-            .toList();
-
-        if (points.length < 2) continue;
-
-        final props = f['properties'] ?? {};
-        loadedGutters.add(Gutter(
-          id: props['id']?.toString() ?? 'SG-${DateTime.now().millisecondsSinceEpoch}',
-          name: props['name']?.toString() ?? '',
-          points: points,
-          color: props['color'] != null ? Color(props['color'] as int) : Colors.blue,
-          strokeWidth: (props['strokeWidth'] as num?)?.toDouble() ?? 7.5,
-          showArrow: props['showArrow'] as bool? ?? false,
-          properties: Map<String, dynamic>.from(props),
-        ));
-      }
-
-      if (loadedGutters.isEmpty) return;
-
-      setState(() {
-        layers.add(GutterLayer(
-          id: DateTime.now().millisecondsSinceEpoch.toString(),
-          name: "URL読み込み ${layers.length + 1}",
-          gutters: loadedGutters,
-        ));
-      });
-
-      _showAllGutters();
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${loadedGutters.length}本のラインを読み込みました')),
-        );
-      }
+      _addParsedLayer(gutters, 'URL読み込み ${layers.length + 1}');
+      _showSnackBar('${gutters.length}本のラインを読み込みました');
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('読み込み失敗: $e')),
-        );
-      }
+      _showSnackBar('読み込み失敗: $e');
     }
   }
 
-  // ==================== GeoJSON共有URL生成 ====================
-void _generateShareUrl() {
-  final controller = TextEditingController();
-
-  showDialog(
-    context: context,
-    builder: (dialogContext) => AlertDialog(
-      title: const Text('GeoJSON共有URL生成'),
-      content: TextField(
-        controller: controller,
-        decoration: const InputDecoration(
-          hintText: 'https://raw.githubusercontent.com/...',
-        ),
-        maxLines: 3,
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(dialogContext),
-          child: const Text('キャンセル'),
-        ),
-        TextButton(
-          onPressed: () {
-            final geojsonUrl = controller.text.trim();
-
-            if (geojsonUrl.isEmpty) return;
-
-            // 現在のVercel URL取得
-            final baseUrl =
-            '${web.window.location.origin}/';
-
-            // geojson パラメータ付きURL生成
-            final shareUrl =
-                '$baseUrl?geojson=${Uri.encodeComponent(geojsonUrl)}';
-
-            // クリップボードへコピー
-            Clipboard.setData(
-              ClipboardData(text: shareUrl),
-            );
-
-            if (!context.mounted) return;
-
-            Navigator.pop(dialogContext);
-
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('共有URLをコピーしました'),
-              ),
-            );
-
-            if (!context.mounted) return;
-
-            // URL表示ダイアログ
-            showDialog(
-              context: context,
-              builder: (_) => AlertDialog(
-                title: const Text('共有URL'),
-                content: SelectableText(shareUrl),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(dialogContext),
-                    child: const Text('閉じる'),
-                  ),
-                ],
-              ),
-            );
-          },
-          child: const Text('生成'),
-        ),
-      ],
-    ),
-  );
-}
-
-  // ==================== 以下はあなたの元のコードをそのまま使用 ====================
-  String getTileUrl() {
-    switch (currentTile) {
-      case 'gsi_photo':
-        return 'https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg';
-      default:
-        return 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
-    }
-  }
-
-  Future<void> _saveToLocalStorage() async {
-    final prefs = await SharedPreferences.getInstance();
-    final layersData = layers.map((layer) => layer.toJson()).toList();
-    await prefs.setString('layers_data', jsonEncode(layersData));
-  }
-
-  Future<void> _loadFromLocalStorage() async {
-    final prefs = await SharedPreferences.getInstance();
-    final String? data = prefs.getString('layers_data');
-
-    if (data != null && data.isNotEmpty) {
-      try {
-        final List<dynamic> layersJson = jsonDecode(data);
-        setState(() {
-          layers.clear();
-          for (var layerJson in layersJson) {
-            layers.add(GutterLayer.fromJson(layerJson as Map<String, dynamic>));
-          }
-        });
-      } catch (e) {
-        debugPrint('レイヤー読み込みエラー: $e');
-      }
-    }
-  }
-
-        // ==================== GeoJSON 読み込み ====================
-  Future<void> _loadGeoJSON() async {
-    try {
-      final FilePickerResult? result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['geojson', 'json'],
-        allowMultiple: false,
-      );
-
-      if (result == null || result.files.isEmpty) return;
-
-      final PlatformFile file = result.files.first;
-      final jsonString = utf8.decode(file.bytes!);
-      final data = jsonDecode(jsonString);
-      final features = data['features'] as List<dynamic>? ?? [];
-
-      final List<Gutter> loadedGutters = [];
-
-      for (var f in features) {
-        final geometry = f['geometry'];
-        if (geometry == null) continue;
-
-        List<dynamic> allCoords = [];
-        if (geometry['type'] == 'MultiLineString') {
-          for (var line in geometry['coordinates'] as List) {
-            allCoords.addAll(line as List<dynamic>);
-          }
-        } else if (geometry['type'] == 'LineString') {
-          allCoords = geometry['coordinates'] as List<dynamic>;
-        } else {
-          continue;
-        }
-
-        final points = allCoords
-            .map((coord) => LatLng((coord[1] as num).toDouble(), (coord[0] as num).toDouble()))
-            .toList();
-
-        if (points.length < 2) continue;
-
-        final props = f['properties'] ?? {};
-        loadedGutters.add(Gutter(
-          id: props['id']?.toString() ?? 
-              props['ID']?.toString() ?? 
-              'SG-${DateTime.now().millisecondsSinceEpoch}',
-          name: props['name']?.toString() ?? 
-                props['名称']?.toString() ?? 
-                props['Name']?.toString() ?? '',
-          points: points,
-          properties: Map<String, dynamic>.from(props),
-        ));
-      }
-
-      if (loadedGutters.isEmpty) {
-        if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('有効なラインがありませんでした')));
-        }
-        return;
-      }
-
-      final layerName = "レイヤー ${layers.length + 1} - ${file.name}";
-
-      setState(() {
-        layers.add(GutterLayer(
-          id: DateTime.now().millisecondsSinceEpoch.toString(),
-          name: layerName,
-          gutters: loadedGutters,
-        ));
-      });
-
-      // 自動でDrawerを開く（確認しやすくする）
-      Future.delayed(const Duration(milliseconds: 300), () {
-        if (mounted) {                    // ← 追加
-          Scaffold.of(context).openEndDrawer();
-        }
-      });
-
-      if (mounted) {                      // ← 追加
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${loadedGutters.length}件を「$layerName」に追加しました')),
-        );
-      }
-
-      _showAllGutters();
-    } 
-    catch (e) {
-      print('読み込みエラー: $e');
-        if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('読み込みエラー: $e')));
-        }
-    }
-  }
+  // ================================================================
+  // GeoJSON エクスポート（ダウンロード）
+  // ================================================================
 
   void _exportGeoJSON() {
     try {
-      final List<Map<String, dynamic>> allFeatures = [];
-
-      for (final layer in layers) {
-        for (final g in layer.gutters) {
-          allFeatures.add({
-            "type": "Feature",
-            "geometry": {
-              "type": "LineString",
-              "coordinates": g.points.map((p) => [p.longitude, p.latitude]).toList(),
+      final features = [
+        for (final layer in layers)
+          for (final g in layer.gutters)
+            {
+              'type': 'Feature',
+              'geometry': {
+                'type': 'LineString',
+                'coordinates':
+                    g.points.map((p) => [p.longitude, p.latitude]).toList(),
+              },
+              'properties': {
+                'layer': layer.name,
+                'id': g.id,
+                'name': g.name,
+                ...g.properties, // 元のGeoJSONプロパティをすべて保持
+              },
             },
-            "properties": {
-              "layer": layer.name,
-              "id": g.id,
-              "name": g.name,
-              ...g.properties,        // GeoJSONに元々あった全フィールドを展開
-            },
-          });
-        }
-      }
+      ];
 
-      if (allFeatures.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('エクスポートするデータがありません')),
-        );
+      if (features.isEmpty) {
+        _showSnackBar('エクスポートするデータがありません');
         return;
       }
 
-      final geoJson = {
-        "type": "FeatureCollection",
-        "features": allFeatures,
-        "exported_at": DateTime.now().toIso8601String(),
-      };
-
-      final jsonString = const JsonEncoder.withIndent('  ').convert(geoJson);
-
-      final bytes = utf8.encode(jsonString);
-      final base64String = base64Encode(bytes);
-      final dataUrl = 'data:application/geo+json;base64,$base64String';
+      final jsonString = const JsonEncoder.withIndent('  ').convert({
+        'type': 'FeatureCollection',
+        'features': features,
+        'exported_at': DateTime.now().toIso8601String(),
+      });
 
       final anchor = web.HTMLAnchorElement()
-        ..href = dataUrl
-        ..download = "sideGutters_${DateTime.now().toIso8601String().substring(0, 10)}.geojson";
-
+        ..href =
+            'data:application/geo+json;base64,${base64Encode(utf8.encode(jsonString))}'
+        ..download =
+            'sideGutters_${DateTime.now().toIso8601String().substring(0, 10)}.geojson';
       web.document.body!.append(anchor);
       anchor.click();
       anchor.remove();
 
-      if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${allFeatures.length}件をエクスポートしました')),
-      );
-      }
+      _showSnackBar('${features.length}件をエクスポートしました');
     } catch (e) {
-      print('Export Error: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('エクスポートエラー: $e')));
-      }
+      debugPrint('Export Error: $e');
+      _showSnackBar('エクスポートエラー: $e');
     }
   }
 
+  // ================================================================
+  // GeoJSON アップロード（Vercel APIへPOST）
+  // ================================================================
+
   Future<void> _uploadCurrentLayer() async {
-  try {
-    final currentLayer = _currentLayer;
+    try {
+      final layer = _currentLayer;
+      if (layer == null) return;
 
-    if (currentLayer == null) return;
+      final response = await http.post(
+        Uri.parse('/api/uploadGeoJson'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'geojson': {
+            'type': 'FeatureCollection',
+            'features': [
+              for (final g in layer.gutters)
+                {
+                  'type': 'Feature',
+                  'geometry': {
+                    'type': 'LineString',
+                    'coordinates':
+                        g.points.map((p) => [p.longitude, p.latitude]).toList(),
+                  },
+                  'properties': {'id': g.id, 'name': g.name, ...g.properties},
+                },
+            ],
+          },
+        }),
+      );
 
-    final features = currentLayer.gutters.map((g) {
-      return {
-        "type": "Feature",
-        "geometry": {
-          "type": "LineString",
-          "coordinates":
-              g.points.map((p) => [p.longitude, p.latitude]).toList(),
-        },
-        "properties": {
-          "id": g.id,
-          "name": g.name,
-          ...g.properties,
-        },
-      };
-    }).toList();
+      final data = jsonDecode(response.body);
+      if (response.statusCode != 200) throw Exception(data.toString());
 
-    final geojson = {
-      "type": "FeatureCollection",
-      "features": features,
-    };
+      final shareUrl =
+          '${web.window.location.origin}/?geojson=${Uri.encodeComponent(data['rawUrl'] as String)}';
+      await Clipboard.setData(ClipboardData(text: shareUrl));
 
-    final uri = Uri.parse('/api/uploadGeoJson');
-
-    final response = await http.post(
-      uri,
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: jsonEncode({
-        'geojson': geojson,
-      }),
-    );
-
-    final data = jsonDecode(response.body);
-
-    if (response.statusCode != 200) {
-      throw Exception(data.toString());
-    }
-
-    final rawUrl = data['rawUrl'];
-
-    // 共有URL
-    final shareUrl =
-        '${web.window.location.origin}/'
-        '?geojson=${Uri.encodeComponent(rawUrl)}';
-    
-    await Clipboard.setData(
-      ClipboardData(text: shareUrl),
-    );
-
-    if (mounted) {
+      if (!mounted) return;
       showDialog(
         context: context,
         builder: (_) => AlertDialog(
@@ -615,19 +453,11 @@ void _generateShareUrl() {
           actions: [
             TextButton(
               onPressed: () {
-                Clipboard.setData(
-                  ClipboardData(text: shareUrl),
-                );
-
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('URLをコピーしました'),
-                  ),
-                );
+                Clipboard.setData(ClipboardData(text: shareUrl));
+                _showSnackBar('URLをコピーしました');
               },
               child: const Text('コピー'),
             ),
-
             TextButton(
               onPressed: () => Navigator.pop(context),
               child: const Text('閉じる'),
@@ -635,200 +465,209 @@ void _generateShareUrl() {
           ],
         ),
       );
-    }
-
-  } catch (e) {
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('アップロード失敗: $e')),
-      );
+    } catch (e) {
+      _showSnackBar('アップロード失敗: $e');
     }
   }
-}
 
-  // ==================== モード切り替え ====================
-  void _toggleAddMode() {
-    setState(() {
-      isAddingNew = !isAddingNew;
-      isCutting = false;
-      newPoints.clear();
-    });
-  }
+  // ================================================================
+  // 共有URL生成
+  // ================================================================
 
-  void _toggleCutMode() {
-    setState(() {
-      isCutting = !isCutting;
-      isAddingNew = false;
-    });
-  }
-
-    void _addPoint(TapPosition tapPosition, LatLng point) {
-    final currentLayer = _currentLayer;
-    if (currentLayer == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('レイヤーがありません。先にGeoJSONを読み込んでください。')),
+  void _generateShareUrl() => _showUrlInputDialog(
+        title: 'GeoJSON共有URL生成',
+        hint: 'https://raw.githubusercontent.com/...',
+        actionLabel: '生成',
+        onSubmit: (geojsonUrl) {
+          final shareUrl =
+              '${web.window.location.origin}/?geojson=${Uri.encodeComponent(geojsonUrl)}';
+          Clipboard.setData(ClipboardData(text: shareUrl));
+          _showSnackBar('共有URLをコピーしました');
+          if (!context.mounted) return;
+          showDialog(
+            context: context,
+            builder: (_) => AlertDialog(
+              title: const Text('共有URL'),
+              content: SelectableText(shareUrl),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('閉じる'),
+                ),
+              ],
+            ),
+          );
+        },
       );
+
+  // ================================================================
+  // モード切り替え
+  // ================================================================
+
+  void _toggleAddMode() => setState(() {
+        isAddingNew = !isAddingNew;
+        isCutting = false;
+        newPoints.clear();
+      });
+
+  void _toggleCutMode() => setState(() {
+        isCutting = !isCutting;
+        isAddingNew = false;
+      });
+
+  // ================================================================
+  // マップタップ処理
+  // ================================================================
+
+  void _addPoint(TapPosition _, LatLng point) {
+    final layer = _currentLayer;
+    if (layer == null) {
+      _showSnackBar('レイヤーがありません。先にGeoJSONを読み込んでください。');
       return;
     }
 
     if (isAddingNew) {
       setState(() => newPoints.add(point));
     } else if (isCutting) {
-      _cutLineAtPoint(point, currentLayer);   // 修正
+      _cutLineAtPoint(point, layer);
     } else {
-      // 現在選択中のレイヤー内のラインだけを対象に検索
-      final nearest = _findNearestGutterInLayer(point, currentLayer);
-      if (nearest != null) {
-        _showGutterInfo(nearest);
-      }
+      // 選択中レイヤー内で最近傍のラインを探してタップ情報を表示
+      final nearest = _findNearestGutterInLayer(point, layer);
+      if (nearest != null) _showGutterInfo(nearest);
     }
   }
 
-  // ==================== 切断機能 ====================
+  // ================================================================
+  // 切断機能
+  // ================================================================
+
+  /// タップ点に最も近いセグメントを分割し、2本のGutterに置き換える（30m以内のみ）
   void _cutLineAtPoint(LatLng tapPoint, GutterLayer layer) {
-    double bestDistance = double.infinity;
-    int bestGutterIndex = -1;
-    int bestSegmentIndex = -1;
-    LatLng? bestSplitPoint;
+    double bestDist = double.infinity;
+    int bestIdx = -1;
+    int bestSeg = -1;
+    LatLng? bestProj;
 
     for (int i = 0; i < layer.gutters.length; i++) {
-      final gutter = layer.gutters[i];
-      final points = gutter.points;
-      if (points.length < 2) continue;
-
-      for (int j = 0; j < points.length - 1; j++) {
-        final p1 = points[j];
-        final p2 = points[j + 1];
-        final projection = _projectPointOnSegment(tapPoint, p1, p2);
-        final dist = distanceCalculator.distance(tapPoint, projection);
-
-        if (dist < bestDistance) {
-          bestDistance = dist;
-          bestGutterIndex = i;
-          bestSegmentIndex = j;
-          bestSplitPoint = projection;
+      final pts = layer.gutters[i].points;
+      if (pts.length < 2) continue;
+      for (int j = 0; j < pts.length - 1; j++) {
+        final proj = _projectOnSegment(tapPoint, pts[j], pts[j + 1]);
+        final dist = _distance.distance(tapPoint, proj);
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestIdx = i;
+          bestSeg = j;
+          bestProj = proj;
         }
       }
     }
 
-    if (bestGutterIndex != -1 && bestDistance < 30 && bestSplitPoint != null) {
-      final gutter = layer.gutters[bestGutterIndex];
-      final points = gutter.points;
-      final splitIdx = bestSegmentIndex + 1;
-
-      final partA = [...points.sublist(0, splitIdx), bestSplitPoint];
-      final partB = [bestSplitPoint, ...points.sublist(splitIdx)];
-
-      setState(() {
-        layer.gutters.removeAt(bestGutterIndex);
-
-        layer.gutters.add(Gutter(
-          id: '${gutter.id}-A',
-          name: '${gutter.name}-A',
-          points: partA,
-          color: gutter.color,
-          properties: Map.from(gutter.properties),
-        ));
-
-        layer.gutters.add(Gutter(
-          id: '${gutter.id}-B',
-          name: '${gutter.name}-B',
-          points: partB,
-          color: gutter.color,
-          properties: Map.from(gutter.properties),
-        ));
-      });
-
-      _saveToLocalStorage();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('切断完了 (${bestDistance.toStringAsFixed(1)}m)')),
-      );
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('ラインの近くをタップしてください')),
-      );
+    if (bestIdx == -1 || bestDist >= 30 || bestProj == null) {
+      _showSnackBar('ラインの近くをタップしてください');
+      return;
     }
+
+    final g = layer.gutters[bestIdx];
+    final pts = g.points;
+    setState(() {
+      layer.gutters
+        ..removeAt(bestIdx)
+        ..add(Gutter(
+          id: '${g.id}-A',
+          name: '${g.name}-A',
+          points: [...pts.sublist(0, bestSeg + 1), bestProj!],
+          color: g.color,
+          properties: Map.from(g.properties),
+        ))
+        ..add(Gutter(
+          id: '${g.id}-B',
+          name: '${g.name}-B',
+          points: [bestProj!, ...pts.sublist(bestSeg + 1)],
+          color: g.color,
+          properties: Map.from(g.properties),
+        ));
+    });
+
+    _saveToLocalStorage();
+    _showSnackBar('切断完了 (${bestDist.toStringAsFixed(1)}m)');
   }
 
-  LatLng _projectPointOnSegment(LatLng p, LatLng a, LatLng b) {
+  /// 点Pを線分AB上に正射影した最近傍点を返す（端点でクランプ）
+  LatLng _projectOnSegment(LatLng p, LatLng a, LatLng b) {
     final dx = b.longitude - a.longitude;
     final dy = b.latitude - a.latitude;
     final len2 = dx * dx + dy * dy;
     if (len2 == 0) return a;
-    var t = ((p.longitude - a.longitude) * dx + (p.latitude - a.latitude) * dy) / len2;
-    t = t.clamp(0.0, 1.0);
-    return LatLng(a.latitude + t * dy, a.longitude + t * dx);
+    final t = ((p.longitude - a.longitude) * dx +
+            (p.latitude - a.latitude) * dy) /
+        len2;
+    final tc = t.clamp(0.0, 1.0);
+    return LatLng(a.latitude + tc * dy, a.longitude + tc * dx);
   }
 
-    Gutter? _findNearestGutterInLayer(LatLng tapPoint, GutterLayer layer) {
-    double bestDistance = double.infinity;
-    Gutter? nearestGutter;
-
-    for (final gutter in layer.gutters) {
-      if (gutter.points.length < 2) continue;
-      for (int j = 0; j < gutter.points.length - 1; j++) {
-        final p1 = gutter.points[j];
-        final p2 = gutter.points[j + 1];
-        final projection = _projectPointOnSegment(tapPoint, p1, p2);
-        final dist = distanceCalculator.distance(tapPoint, projection);
-
-        if (dist < bestDistance && dist < 25) {
-          bestDistance = dist;
-          nearestGutter = gutter;
+  /// 選択中レイヤー内で、タップ点から25m以内の最近傍Gutterを返す
+  Gutter? _findNearestGutterInLayer(LatLng tapPoint, GutterLayer layer) {
+    double bestDist = double.infinity;
+    Gutter? nearest;
+    for (final g in layer.gutters) {
+      if (g.points.length < 2) continue;
+      for (int j = 0; j < g.points.length - 1; j++) {
+        final dist = _distance.distance(
+            tapPoint,
+            _projectOnSegment(tapPoint, g.points[j], g.points[j + 1]));
+        if (dist < bestDist && dist < 25) {
+          bestDist = dist;
+          nearest = g;
         }
       }
     }
-    return nearestGutter;
+    return nearest;
   }
 
-    // ==================== 新規追加 ====================
+  // ================================================================
+  // 新規Gutter追加
+  // ================================================================
+
   void _saveNewGutter() {
     if (newPoints.length < 2) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('2点以上タップしてください')));
+      _showSnackBar('2点以上タップしてください');
+      return;
+    }
+    final layer = _currentLayer;
+    if (layer == null) {
+      _showSnackBar('レイヤーが選択されていません');
       return;
     }
 
-    final currentLayer = _currentLayer;
-    if (currentLayer == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('レイヤーが選択されていません')));
-      return;
-    }
-
-    final nameController = TextEditingController(text: '側溝 SG-00$newGutterCounter');
-
+    final ctrl = TextEditingController(text: '側溝 SG-00$_newGutterCounter');
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (ctx) => AlertDialog(
         title: const Text('新規側溝保存'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(controller: nameController, decoration: const InputDecoration(labelText: '側溝名')),
-          ],
-        ),
+        content: TextField(
+            controller: ctrl,
+            decoration: const InputDecoration(labelText: '側溝名')),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('キャンセル')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('キャンセル')),
           TextButton(
             onPressed: () {
               setState(() {
-                currentLayer.gutters.add(Gutter(
-                  id: 'SG-00$newGutterCounter',
-                  name: nameController.text,
+                layer.gutters.add(Gutter(
+                  id: 'SG-00$_newGutterCounter',
+                  name: ctrl.text,
                   points: List.from(newPoints),
                   properties: {},
                 ));
-                newGutterCounter++;
+                _newGutterCounter++;
                 newPoints.clear();
                 isAddingNew = false;
               });
-
               _saveToLocalStorage();
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('「${currentLayer.name}」に追加しました')),
-                );
-              }
-              Navigator.pop(context);
+              _showSnackBar('「${layer.name}」に追加しました');
+              Navigator.pop(ctx);
             },
             child: const Text('保存'),
           ),
@@ -837,174 +676,181 @@ void _generateShareUrl() {
     );
   }
 
-  // ==================== 情報表示・編集 ====================
-  void _showGutterInfo(Gutter gutter) {
+  // ================================================================
+  // Gutter 情報表示・編集
+  // ================================================================
+
+  /// 属性情報の閲覧ダイアログ（編集・削除へ遷移できる）
+  void _showGutterInfo(Gutter g) {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text(gutter.name.isNotEmpty ? gutter.name : '属性情報'),
+      builder: (ctx) => AlertDialog(
+        title: Text(g.name.isNotEmpty ? g.name : '属性情報'),
         content: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('ID: ${gutter.id}'),
+              Text('ID: ${g.id}'),
               const Divider(),
-              ...gutter.properties.entries.map((e) => 
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 4),
-                  child: Text('${e.key}: ${e.value}'),
-                )
-              )
+              ...g.properties.entries.map((e) => Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Text('${e.key}: ${e.value}'),
+                  )),
             ],
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('閉じる')),
-          TextButton(onPressed: () { Navigator.pop(context); _showEditForm(gutter); }, child: const Text('編集')),
-          TextButton(onPressed: () { Navigator.pop(context); _confirmDelete(gutter); }, child: const Text('削除', style: TextStyle(color: Colors.red))),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('閉じる')),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _showEditForm(g);
+            },
+            child: const Text('編集'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _confirmDelete(g);
+            },
+            child: const Text('削除', style: TextStyle(color: Colors.red)),
+          ),
         ],
       ),
     );
   }
 
-    void _showEditForm(Gutter gutter) {
-    final currentLayer = _currentLayer;
-    if (currentLayer == null) return;
-
-    // 編集用のコントローラーを作成
-    final controllers = <String, TextEditingController>{};
-    gutter.properties.forEach((key, value) {
-      controllers[key] = TextEditingController(text: value?.toString() ?? '');
-    });
+  /// スタイル・属性の編集フォーム（色・矢印・太さ・プロパティ）
+  void _showEditForm(Gutter g) {
+    if (_currentLayer == null) return;
+    final ctrls = {
+      for (final e in g.properties.entries)
+        e.key: TextEditingController(text: e.value?.toString() ?? ''),
+    };
 
     showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: Text(gutter.name.isNotEmpty ? gutter.name : '属性編集'),
+        builder: (context, setS) => AlertDialog(
+          title: Text(g.name.isNotEmpty ? g.name : '属性編集'),
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // 名称（特別扱い）
+                // 名称
                 TextField(
-                  controller: TextEditingController(text: gutter.name),
+                  controller: TextEditingController(text: g.name),
                   decoration: const InputDecoration(labelText: '名称'),
-                  onChanged: (v) => gutter.name = v,
+                  onChanged: (v) => g.name = v,
                 ),
                 const SizedBox(height: 12),
-                
+
                 // GeoJSONの全フィールドを動的に表示
-                ...controllers.entries.map((entry) {
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: TextField(
-                      controller: entry.value,
-                      decoration: InputDecoration(labelText: entry.key),
-                    ),
-                  );
-                }),
+                ...ctrls.entries.map((e) => Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: TextField(
+                          controller: e.value,
+                          decoration: InputDecoration(labelText: e.key)),
+                    )),
                 const SizedBox(height: 12),
+
+                // ライン色
                 const Text('ライン色'),
                 Wrap(
-                  children: [
-                    Colors.blue, Colors.red, Colors.green, Colors.orange,
-                    Colors.purple, Colors.teal, Colors.brown, Colors.grey
-                  ].map((c) => GestureDetector(
-                        onTap: () => setDialogState(() => gutter.color = c),
-                        child: Container(
-                          width: 40, height: 40,
-                          margin: const EdgeInsets.all(6),
-                          decoration: BoxDecoration(
-                            color: c,
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: gutter.color == c ? Colors.black : Colors.transparent,
-                              width: 3,
+                  children: _kColorPalette
+                      .map((c) => GestureDetector(
+                            onTap: () => setS(() => g.color = c),
+                            child: Container(
+                              width: 40,
+                              height: 40,
+                              margin: const EdgeInsets.all(6),
+                              decoration: BoxDecoration(
+                                color: c,
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: g.color == c
+                                      ? Colors.black
+                                      : Colors.transparent,
+                                  width: 3,
+                                ),
+                              ),
                             ),
-                          ),
-                        ),
-                      )).toList(),
+                          ))
+                      .toList(),
                 ),
-                                const SizedBox(height: 16),
+                const SizedBox(height: 16),
+
+                // 流向矢印
                 CheckboxListTile(
                   title: const Text('終点に流向矢印を表示'),
-                  value: gutter.showArrow,
-                  onChanged: (val) {
-                    setDialogState(() => gutter.showArrow = val ?? false);
-                  },
+                  value: g.showArrow,
+                  onChanged: (v) => setS(() => g.showArrow = v ?? false),
                   controlAffinity: ListTileControlAffinity.leading,
                 ),
-                const SizedBox(height: 8),
-                if (gutter.showArrow) ...[
+                if (g.showArrow) ...[
+                  const SizedBox(height: 8),
                   const Text('矢印サイズ'),
                   Slider(
-                    value: gutter.arrowSize,
+                    value: g.arrowSize,
                     min: 5.0,
                     max: 20.0,
                     divisions: 30,
-                    label: gutter.arrowSize.toStringAsFixed(1),
-                    onChanged: (val) {
-                      setDialogState(() => gutter.arrowSize = val);
-                    },
+                    label: g.arrowSize.toStringAsFixed(1),
+                    onChanged: (v) => setS(() => g.arrowSize = v),
                   ),
-                  Text('現在のサイズ: ${gutter.arrowSize.toStringAsFixed(1)}'),
+                  Text('現在のサイズ: ${g.arrowSize.toStringAsFixed(1)}'),
                 ],
-
                 const SizedBox(height: 16),
+
+                // ラインの太さ
                 const Text('ラインの太さ'),
                 Slider(
-                  value: gutter.strokeWidth,
+                  value: g.strokeWidth,
                   min: 3.0,
                   max: 15.0,
                   divisions: 24,
-                  label: gutter.strokeWidth.toStringAsFixed(1),
-                  onChanged: (val) {
-                    setDialogState(() => gutter.strokeWidth = val);
-                  },
+                  label: g.strokeWidth.toStringAsFixed(1),
+                  onChanged: (v) => setS(() => g.strokeWidth = v),
                 ),
-                Text('現在の太さ: ${gutter.strokeWidth.toStringAsFixed(1)}'),
+                Text('現在の太さ: ${g.strokeWidth.toStringAsFixed(1)}'),
               ],
             ),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('キャンセル')),
-              // 流向反転ボタン
-              TextButton.icon(
-                icon: const Icon(Icons.swap_horiz),
-                label: const Text('流向反転'),
-                onPressed: () {
-                  setState(() {
-                    gutter.points = gutter.points.reversed.toList();
-                  });
-                  _saveToLocalStorage();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('流向を反転しました')),
-                  );
-                },
-              ),
-              TextButton.icon(
-              icon: const Icon(Icons.edit_note),
-              label: const Text('詳細編集'),   // ← 新規追加
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('キャンセル')),
+
+            // 流向反転: ポイント列を逆順にして矢印方向を反転
+            TextButton.icon(
+              icon: const Icon(Icons.swap_horiz),
+              label: const Text('流向反転'),
               onPressed: () {
-                Navigator.pop(ctx);                    // 現在のダイアログを閉じる
-                _showGutterEditDialog(gutter);         // 断面形状・口径・メモ編集画面を開く
+                setState(() => g.points = g.points.reversed.toList());
+                _saveToLocalStorage();
+                _showSnackBar('流向を反転しました');
               },
-            ),              
+            ),
+
+            // 詳細編集: 断面形状・口径・メモの編集フォームへ
+            TextButton.icon(
+              icon: const Icon(Icons.edit_note),
+              label: const Text('詳細編集'),
+              onPressed: () {
+                Navigator.pop(ctx);
+                _showGutterDetailDialog(g);
+              },
+            ),
+
             TextButton(
               onPressed: () {
-                // 編集した値をpropertiesに戻す
-                controllers.forEach((key, ctrl) {
-                  gutter.properties[key] = ctrl.text;
-                });
-
+                ctrls.forEach((key, c) => g.properties[key] = c.text);
                 setState(() {});
                 _saveToLocalStorage();
                 Navigator.pop(ctx);
-                if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('保存しました')));
-                }
+                _showSnackBar('保存しました');
               },
               child: const Text('保存'),
             ),
@@ -1014,214 +860,91 @@ void _generateShareUrl() {
     );
   }
 
-    void _confirmDelete(Gutter gutter) {
-    final currentLayer = _currentLayer;
-    if (currentLayer == null) return;
-
+  void _confirmDelete(Gutter g) {
+    final layer = _currentLayer;
+    if (layer == null) return;
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (ctx) => AlertDialog(
         title: const Text('削除確認'),
-        content: Text('${gutter.name} を削除しますか？'),
+        content: Text('${g.name} を削除しますか？'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('キャンセル')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('キャンセル')),
           TextButton(
             onPressed: () {
-              setState(() {
-                currentLayer.gutters.remove(gutter);
-              });
-              if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('削除しました')));
-              }
-              Navigator.pop(context);
+              setState(() => layer.gutters.remove(g));
+              _saveToLocalStorage();
+              _showSnackBar('削除しました');
+              Navigator.pop(ctx);
             },
             child: const Text('削除', style: TextStyle(color: Colors.red)),
           ),
         ],
       ),
     );
-    _saveToLocalStorage();// 保存処理
   }
 
-    void _showAllGutters() {
-    final allPoints = layers
-        .where((layer) => layer.visible)
-        .expand((layer) => layer.gutters)
-        .expand((g) => g.points)
-        .toList();
+  // ================================================================
+  // 断面形状・口径・メモの詳細編集
+  // ================================================================
 
-    if (allPoints.isNotEmpty) {
-      mapController.fitCamera(
-        CameraFit.bounds(bounds: LatLngBounds.fromPoints(allPoints), padding: const EdgeInsets.all(60)),
-      );
-    }
-  }
-
-    Future<void> _getCurrentLocation() async {
-    try {
-      Position position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          distanceFilter: 10,           // 10メートル移動するごとに更新（任意）
-        ),
-      );
-
-      mapController.move(
-        LatLng(position.latitude, position.longitude), 
-        17.0,
-      );
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('位置情報取得失敗: $e')),
-        );
-      }
-    }
-  }
-
-    void _renameLayer(int index) {
-    final layer = layers[index];
-    final controller = TextEditingController(text: layer.name);
+  void _showGutterDetailDialog(Gutter g) {
+    final memCtrl = TextEditingController(text: g.memo);
+    final shapeCtrl = TextEditingController(text: g.shape);
+    final diamCtrl = TextEditingController(text: g.diameter);
 
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('レイヤー名変更'),
-        content: TextField(controller: controller),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('キャンセル')),
-          TextButton(
-            onPressed: () {
-              setState(() => layer.name = controller.text);
-              Navigator.pop(ctx);
-            },
-            child: const Text('保存'),
-          ),
-        ],
-      ),
-    );
-    _saveToLocalStorage();// 保存処理
-  }
-
-  void _createEmptyLayer() {
-    setState(() {
-      layers.add(GutterLayer(
-        id: DateTime.now().millisecondsSinceEpoch.toString(),
-        name: "新規レイヤー ${layers.length + 1}",
-        gutters: [],
-      ));
-    });
-    _saveToLocalStorage();// 保存処理
-  }
-
-    void _showGutterEditDialog(Gutter gutter) {
-    final memoController = TextEditingController(text: gutter.memo);
-    final shapeController = TextEditingController(text: gutter.shape);
-    final diameterController = TextEditingController(text: gutter.diameter);
-
-    // 候補リスト
-    final shapeOptions = ['open', 'box', 'circle', 'other'];
-    final shapeLabels = {
-      'open': '開渠',
-      'box': 'BOX',
-      'circle': '円形',
-      'other': 'その他',
-    };
-
-    final diameterOptions = [
-      '300×300', '400×400', '500×500', '600×600',
-      '700×700', '800×800', '900×900', '1000×1000',
-      '300×400', '400×500', '500×600'
-    ];
-
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(gutter.id),
+        title: Text(g.id),
         content: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // === 断面形状 ===
-              Autocomplete<String>(
-                initialValue: TextEditingValue(text: gutter.shape),
-                optionsBuilder: (TextEditingValue textEditingValue) {
-                  if (textEditingValue.text.isEmpty) {
-                    return shapeOptions;
-                  }
-                  return shapeOptions.where((option) =>
-                      option.toLowerCase().contains(textEditingValue.text.toLowerCase()) ||
-                      (shapeLabels[option] ?? '').contains(textEditingValue.text));
-                },
-                displayStringForOption: (option) => shapeLabels[option] ?? option,
-                onSelected: (String selection) {
-                  shapeController.text = selection;
-                },
-                fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
-                  shapeController.text = controller.text; // 同期
-                  return TextFormField(
-                    controller: controller,
-                    focusNode: focusNode,
-                    decoration: const InputDecoration(
-                      labelText: '断面形状',
-                      border: OutlineInputBorder(),
-                      hintText: '開渠 / BOX / 円形 など',
-                    ),
-                  );
-                },
+              // 断面形状（オートコンプリート）
+              _buildAutocomplete(
+                label: '断面形状',
+                hint: '開渠 / BOX / 円形 など',
+                initial: g.shape,
+                options: _kShapeOptions,
+                display: (o) => _kShapeLabels[o] ?? o,
+                filter: (o, v) =>
+                    o.toLowerCase().contains(v.toLowerCase()) ||
+                    (_kShapeLabels[o] ?? '').contains(v),
+                ctrl: shapeCtrl,
               ),
-
               const SizedBox(height: 20),
 
-              // === 口径 ===
-              Autocomplete<String>(
-                initialValue: TextEditingValue(text: gutter.diameter),
-                optionsBuilder: (TextEditingValue textEditingValue) {
-                  if (textEditingValue.text.isEmpty) {
-                    return diameterOptions;
-                  }
-                  return diameterOptions.where((option) =>
-                      option.contains(textEditingValue.text));
-                },
-                onSelected: (String selection) {
-                  diameterController.text = selection;
-                },
-                fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
-                  diameterController.text = controller.text;
-                  return TextFormField(
-                    controller: controller,
-                    focusNode: focusNode,
-                    decoration: const InputDecoration(
-                      labelText: '口径（サイズ）',
-                      border: OutlineInputBorder(),
-                      hintText: '300×300 など（自由入力可）',
-                    ),
-                    keyboardType: TextInputType.text,
-                  );
-                },
+              // 口径（オートコンプリート）
+              _buildAutocomplete(
+                label: '口径（サイズ）',
+                hint: '300×300 など（自由入力可）',
+                initial: g.diameter,
+                options: _kDiameterOptions,
+                display: (o) => o,
+                filter: (o, v) => o.contains(v),
+                ctrl: diamCtrl,
               ),
-
               const SizedBox(height: 20),
 
-              // === メモ ===
+              // メモ
               TextField(
-                controller: memoController,
+                controller: memCtrl,
                 maxLines: 4,
                 decoration: const InputDecoration(
                   labelText: 'メモ',
                   border: OutlineInputBorder(),
                 ),
               ),
-
               const SizedBox(height: 16),
 
-              // 流向反転
+              // 流向反転スイッチ
               SwitchListTile(
                 title: const Text('流向を反転'),
-                value: gutter.flowReversed,
-                onChanged: (v) {
-                  setState(() => gutter.flowReversed = v);
-                },
+                value: g.flowReversed,
+                onChanged: (v) => setState(() => g.flowReversed = v),
                 contentPadding: EdgeInsets.zero,
               ),
             ],
@@ -1229,20 +952,17 @@ void _generateShareUrl() {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('キャンセル'),
-          ),
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('キャンセル')),
           ElevatedButton(
             onPressed: () {
               setState(() {
-                gutter.shape = shapeController.text.trim();
-                gutter.diameter = diameterController.text.trim();
-                gutter.memo = memoController.text.trim();
+                g.shape = shapeCtrl.text.trim();
+                g.diameter = diamCtrl.text.trim();
+                g.memo = memCtrl.text.trim();
               });
               Navigator.pop(ctx);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('保存しました')),
-              );
+              _showSnackBar('保存しました');
             },
             child: const Text('保存'),
           ),
@@ -1250,16 +970,125 @@ void _generateShareUrl() {
       ),
     );
   }
-  // ==================== カテゴリ色分けロジック ====================
-  Color _getGutterColor(Gutter gutter, GutterLayer layer) {
-    if (layer.categoryKey != null && layer.categoryColors.isNotEmpty) {
-      final value = gutter.properties[layer.categoryKey!]?.toString() ?? '未分類';
-      return layer.categoryColors[value] ?? Colors.grey;
-    }
-    return gutter.color;
+
+  /// オートコンプリート付きテキストフィールドを生成するファクトリメソッド
+  Widget _buildAutocomplete({
+    required String label,
+    required String hint,
+    required String initial,
+    required List<String> options,
+    required String Function(String) display,
+    required bool Function(String option, String input) filter,
+    required TextEditingController ctrl,
+  }) {
+    return Autocomplete<String>(
+      initialValue: TextEditingValue(text: initial),
+      optionsBuilder: (v) =>
+          v.text.isEmpty ? options : options.where((o) => filter(o, v.text)),
+      displayStringForOption: display,
+      onSelected: (s) => ctrl.text = s,
+      fieldViewBuilder: (context, fieldCtrl, focusNode, _) {
+        ctrl.text = fieldCtrl.text;
+        return TextFormField(
+          controller: fieldCtrl,
+          focusNode: focusNode,
+          decoration: InputDecoration(
+            labelText: label,
+            border: const OutlineInputBorder(),
+            hintText: hint,
+          ),
+        );
+      },
+    );
   }
 
-  // 現在選択中のレイヤーを返す
+  // ================================================================
+  // カメラ・位置情報
+  // ================================================================
+
+  /// 表示中のすべてのGutterが収まるようにカメラをフィット
+  void _showAllGutters() {
+    final pts = layers
+        .where((l) => l.visible)
+        .expand((l) => l.gutters)
+        .expand((g) => g.points)
+        .toList();
+    if (pts.isNotEmpty) {
+      _mapController.fitCamera(CameraFit.bounds(
+        bounds: LatLngBounds.fromPoints(pts),
+        padding: const EdgeInsets.all(60),
+      ));
+    }
+  }
+
+  Future<void> _getCurrentLocation() async {
+    try {
+      final pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          distanceFilter: 10,
+        ),
+      );
+      _mapController.move(LatLng(pos.latitude, pos.longitude), 17.0);
+    } catch (e) {
+      _showSnackBar('位置情報取得失敗: $e');
+    }
+  }
+
+  // ================================================================
+  // レイヤー管理
+  // ================================================================
+
+  void _renameLayer(int index) {
+    final layer = layers[index];
+    final ctrl = TextEditingController(text: layer.name);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('レイヤー名変更'),
+        content: TextField(controller: ctrl),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('キャンセル')),
+          TextButton(
+            onPressed: () {
+              setState(() => layer.name = ctrl.text);
+              _saveToLocalStorage();
+              Navigator.pop(ctx);
+            },
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _createEmptyLayer() {
+    setState(() {
+      layers.add(GutterLayer(
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
+        name: '新規レイヤー ${layers.length + 1}',
+        gutters: [],
+      ));
+    });
+    _saveToLocalStorage();
+  }
+
+  // ================================================================
+  // カテゴリ色分け
+  // ================================================================
+
+  /// カテゴリキーが設定されていればその値で色を決定、なければGutter個別色
+  Color _getGutterColor(Gutter g, GutterLayer layer) {
+    if (layer.categoryKey != null && layer.categoryColors.isNotEmpty) {
+      final value = g.properties[layer.categoryKey!]?.toString() ?? '未分類';
+      return layer.categoryColors[value] ?? Colors.grey;
+    }
+    return g.color;
+  }
+
+  /// 現在選択中のレイヤー（未選択の場合は先頭レイヤー）
   GutterLayer? get _currentLayer {
     if (layers.isEmpty) return null;
     if (selectedLayerIndex != null && selectedLayerIndex! < layers.length) {
@@ -1268,146 +1097,39 @@ void _generateShareUrl() {
     return layers.first;
   }
 
-  // ==================== カテゴリ色分け 補助メソッド ====================
-  List<String> _getAllPropertyKeys(GutterLayer layer) {
-    final keys = <String>{};
-    for (var g in layer.gutters) {
-      g.properties.keys.forEach(keys.add);
-    }
-    return keys.toList()..sort();
-  }
+  List<String> _getAllPropertyKeys(GutterLayer layer) => ({
+        for (final g in layer.gutters) ...g.properties.keys,
+      }.toList()..sort());
 
   List<String> _getUniqueValues(GutterLayer layer, String? key) {
     if (key == null) return [];
-    final values = <String>{};
-    for (var g in layer.gutters) {
-      final v = g.properties[key]?.toString() ?? '未分類';
-      values.add(v);
-    }
-    return values.toList()..sort();
+    return ({
+      for (final g in layer.gutters)
+        g.properties[key]?.toString() ?? '未分類',
+    }.toList()..sort());
   }
 
   Map<String, Color> _generateCategoryColors(GutterLayer layer, String key) {
     final values = _getUniqueValues(layer, key);
-    final colors = <String, Color>{};
-    final palette = Colors.primaries + [Colors.brown, Colors.grey, Colors.pink, Colors.cyan];
-
-    for (int i = 0; i < values.length; i++) {
-      colors[values[i]] = palette[i % palette.length];
-    }
-    return colors;
-  }
-  // ==================== 流向矢印 ====================
-  List<Polygon> _createFlowArrowPolygons() {
-    final polygons = <Polygon>[];
-
-    for (final layer in layers) {
-      if (!layer.visible) continue;
-      
-      for (final gutter in layer.gutters) {
-        if (!gutter.showArrow || gutter.points.length < 2) continue;
-
-        final endPoint = gutter.points.last;
-        final prevPoint = gutter.points[gutter.points.length - 2];
-
-        final color = _getGutterColor(gutter, layer);
-        
-        final arrowPoints = _createArrowheadPolygonPoints(
-          prevPoint, 
-          endPoint, 
-          sizeMeters: gutter.arrowSize,
-        );
-
-        polygons.add(Polygon(
-          points: arrowPoints,
-          color: color,
-          borderColor: Colors.white,
-          borderStrokeWidth: 1.5,
-        ));
-      }
-    }
-    return polygons;
+    final palette = [
+      ...Colors.primaries, Colors.brown, Colors.grey, Colors.pink, Colors.cyan,
+    ];
+    return {
+      for (int i = 0; i < values.length; i++)
+        values[i]: palette[i % palette.length],
+    };
   }
 
-  /// 先端をライン終点に固定し、底辺を進行方向の後ろ側に正しく配置
-  List<LatLng> _createArrowheadPolygonPoints(
-    LatLng from, 
-    LatLng to, 
-    {double sizeMeters = 12.0}
-  ) {
-    // 方向ベクトル（メートル換算）
-    final dy = to.latitude - from.latitude;
-    final dx = to.longitude - from.longitude;
-    
-    final latRad = to.latitude * math.pi / 180;
-    final meterPerDegLat = 111320.0;
-    final meterPerDegLon = meterPerDegLat * math.cos(latRad);
-
-    final vecY = dy * meterPerDegLat;
-    final vecX = dx * meterPerDegLon;
-    
-    final length = math.sqrt(vecX * vecX + vecY * vecY);
-    if (length < 0.000001) return [to, to, to];
-
-    // 単位方向ベクトル
-    final ux = vecX / length;  // 進行方向
-    final uy = vecY / length;
-
-    // 垂直単位ベクトル（右回り）
-    final vx = -uy;
-    final vy = ux;
-
-    // 30度開度（半角15度）
-    const double halfAngleDeg = 15.0;
-    final halfAngleRad = halfAngleDeg * math.pi / 180;
-
-    // 先端（頂点）はラインの終点に完全一致
-    final tip = to;
-
-    // 矢印の「高さ」（後ろにどれだけ伸びるか）
-    final arrowLength = sizeMeters;
-
-    // 底辺の半分の幅
-    final halfWidth = arrowLength * math.tan(halfAngleRad);
-
-    // 底辺の中心位置（先端から後ろに arrowLength だけ戻る）
-    final baseCenterX = -ux * arrowLength;
-    final baseCenterY = -uy * arrowLength;
-
-    // 左翼（底辺左）
-    final leftX = baseCenterX - vx * halfWidth;
-    final leftY = baseCenterY - vy * halfWidth;
-
-    // 右翼（底辺右）
-    final rightX = baseCenterX + vx * halfWidth;
-    final rightY = baseCenterY + vy * halfWidth;
-
-    final left = LatLng(
-      to.latitude  + leftY / meterPerDegLat,
-      to.longitude + leftX / meterPerDegLon,
-    );
-
-    final right = LatLng(
-      to.latitude  + rightY / meterPerDegLat,
-      to.longitude + rightX / meterPerDegLon,
-    );
-
-    return [tip, left, right];
-  }
-
-    void _showCategoryStylingDialog(int layerIndex) {
+  void _showCategoryStylingDialog(int layerIndex) {
     final layer = layers[layerIndex];
-    final allKeys = _getAllPropertyKeys(layer);
-
     String? selectedKey = layer.categoryKey;
     Map<String, Color> tempColors = Map.from(layer.categoryColors);
 
     showDialog(
       context: context,
       builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) {
+        builder: (context, setS) {
           final uniqueValues = _getUniqueValues(layer, selectedKey);
-
           return AlertDialog(
             title: const Text('カテゴリによる色分け'),
             content: SizedBox(
@@ -1420,15 +1142,17 @@ void _generateShareUrl() {
                     hint: const Text('分類する属性を選択'),
                     value: selectedKey,
                     items: [
-                      const DropdownMenuItem(value: null, child: Text('無効（個別色を使う）')),
-                      ...allKeys.map((key) => DropdownMenuItem(value: key, child: Text(key))),
+                      const DropdownMenuItem(
+                          value: null, child: Text('無効（個別色を使う）')),
+                      ..._getAllPropertyKeys(layer).map(
+                          (k) => DropdownMenuItem(value: k, child: Text(k))),
                     ],
-                    onChanged: (val) {
-                      setDialogState(() {
-                        selectedKey = val;
-                        if (val != null) tempColors = _generateCategoryColors(layer, val);
-                      });
-                    },
+                    onChanged: (val) => setS(() {
+                      selectedKey = val;
+                      if (val != null) {
+                        tempColors = _generateCategoryColors(layer, val);
+                      }
+                    }),
                   ),
                   const Divider(),
                   if (selectedKey != null)
@@ -1440,26 +1164,30 @@ void _generateShareUrl() {
                           return ListTile(
                             title: Text(value.isEmpty ? '（空）' : value),
                             trailing: GestureDetector(
-                                onTap: () async {
-                                final Color? pickedColor = await showDialog<Color>(
-                                  context: context,   // ← ここを context に戻す
-                                  builder: (dialogContext) => AlertDialog(  // ← c を dialogContext に変更
+                              onTap: () async {
+                                final picked = await showDialog<Color>(
+                                  context: context,
+                                  builder: (dlg) => AlertDialog(
                                     title: Text('色を選択: $value'),
                                     content: Wrap(
-                                      children: Colors.primaries.map((color) => GestureDetector(  // ← c を color に変更
-                                        onTap: () => Navigator.pop(dialogContext, color),  // ← 修正
-                                        child: Container(
-                                          width: 48,
-                                          height: 48,
-                                          color: color,   // ← ここも修正
-                                          margin: const EdgeInsets.all(4),
-                                        ),
-                                      )).toList(),
+                                      children: Colors.primaries
+                                          .map((c) => GestureDetector(
+                                                onTap: () =>
+                                                    Navigator.pop(dlg, c),
+                                                child: Container(
+                                                  width: 48,
+                                                  height: 48,
+                                                  color: c,
+                                                  margin:
+                                                      const EdgeInsets.all(4),
+                                                ),
+                                              ))
+                                          .toList(),
                                     ),
                                   ),
                                 );
-                                if (pickedColor != null) {
-                                  setDialogState(() => tempColors[value] = pickedColor);
+                                if (picked != null) {
+                                  setS(() => tempColors[value] = picked);
                                 }
                               },
                               child: Container(
@@ -1480,7 +1208,9 @@ void _generateShareUrl() {
               ),
             ),
             actions: [
-              TextButton(onPressed: () => Navigator.pop(context), child: const Text('キャンセル')),
+              TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('キャンセル')),
               TextButton(
                 onPressed: () {
                   setState(() {
@@ -1489,9 +1219,7 @@ void _generateShareUrl() {
                   });
                   _saveToLocalStorage();
                   Navigator.pop(context);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('色分け設定を適用しました')),
-                  );
+                  _showSnackBar('色分け設定を適用しました');
                 },
                 child: const Text('適用'),
               ),
@@ -1502,20 +1230,142 @@ void _generateShareUrl() {
     );
   }
 
-@override
+  // ================================================================
+  // 流向矢印（Polygon）
+  // ================================================================
+
+  /// showArrow=true のGutterの終点に三角形ポリゴンを生成する
+  List<Polygon> _createFlowArrowPolygons() => [
+        for (final layer in layers)
+          if (layer.visible)
+            for (final g in layer.gutters)
+              if (g.showArrow && g.points.length >= 2)
+                Polygon(
+                  points: _arrowheadPoints(
+                    g.points[g.points.length - 2],
+                    g.points.last,
+                    sizeMeters: g.arrowSize,
+                  ),
+                  color: _getGutterColor(g, layer),
+                  borderColor: Colors.white,
+                  borderStrokeWidth: 1.5,
+                ),
+      ];
+
+  /// ラインの [from→to] 方向に合わせた矢頭の3頂点を返す。
+  /// 先端はto（ライン終点）に完全一致。開き角は30度（半角15度）。
+  List<LatLng> _arrowheadPoints(LatLng from, LatLng to,
+      {double sizeMeters = 12.0}) {
+    final dy = to.latitude - from.latitude;
+    final dx = to.longitude - from.longitude;
+
+    const mPerDegLat = 111320.0;
+    final mPerDegLon = mPerDegLat * math.cos(to.latitude * math.pi / 180);
+
+    final vecY = dy * mPerDegLat;
+    final vecX = dx * mPerDegLon;
+    final len = math.sqrt(vecX * vecX + vecY * vecY);
+    if (len < 0.000001) return [to, to, to];
+
+    // 進行方向の単位ベクトル (ux, uy) と垂直単位ベクトル (vx, vy)
+    final ux = vecX / len;
+    final uy = vecY / len;
+    final vx = -uy;
+    final vy = ux;
+    final halfWidth = sizeMeters * math.tan(15.0 * math.pi / 180);
+
+    // 底辺の中心: 先端から進行方向の逆にsizeMeters
+    final bx = -ux * sizeMeters;
+    final by = -uy * sizeMeters;
+
+    return [
+      to,
+      LatLng(to.latitude + (by - vy * halfWidth) / mPerDegLat,
+          to.longitude + (bx - vx * halfWidth) / mPerDegLon),
+      LatLng(to.latitude + (by + vy * halfWidth) / mPerDegLat,
+          to.longitude + (bx + vx * halfWidth) / mPerDegLon),
+    ];
+  }
+
+  // ================================================================
+  // ユーティリティ
+  // ================================================================
+
+  /// mounted チェック付きSnackBar表示
+  void _showSnackBar(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  /// URL入力ダイアログ（URL読み込み・共有URL生成で共用）
+  void _showUrlInputDialog({
+    required String title,
+    required String hint,
+    required String actionLabel,
+    required void Function(String url) onSubmit,
+  }) {
+    final ctrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: TextField(
+          controller: ctrl,
+          decoration: InputDecoration(hintText: hint),
+          maxLines: 3,
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('キャンセル')),
+          TextButton(
+            onPressed: () {
+              final url = ctrl.text.trim();
+              if (url.isEmpty) return;
+              Navigator.pop(ctx);
+              onSubmit(url);
+            },
+            child: Text(actionLabel),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ================================================================
+  // UI（buildを役割ごとのメソッドに分割して見通しを良くする）
+  // ================================================================
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       key: _scaffoldKey,
-      appBar: AppBar(
-        title: Text(isAddingNew ? '新規追加モード' : isCutting ? '切断モード' : '側溝踏査マップ'),
-        backgroundColor: isAddingNew ? Colors.orange : isCutting ? Colors.purple : Colors.blue,
+      appBar: _buildAppBar(),
+      body: _buildMap(),
+      endDrawer: _buildDrawer(),
+      floatingActionButton: _buildFab(),
+    );
+  }
+
+  AppBar _buildAppBar() => AppBar(
+        title: Text(isAddingNew
+            ? '新規追加モード'
+            : isCutting
+                ? '切断モード'
+                : '側溝踏査マップ'),
+        backgroundColor: isAddingNew
+            ? Colors.orange
+            : isCutting
+                ? Colors.purple
+                : Colors.blue,
         actions: [
           PopupMenuButton<String>(
             icon: const Icon(Icons.layers),
-            onSelected: (value) => setState(() => currentTile = value),
-            itemBuilder: (context) => [
-              const PopupMenuItem(value: 'osm', child: Text('OpenStreetMap')),
-              const PopupMenuItem(value: 'gsi_photo', child: Text('航空写真')),
+            onSelected: (v) => setState(() => currentTile = v),
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 'osm', child: Text('OpenStreetMap')),
+              PopupMenuItem(value: 'gsi_photo', child: Text('航空写真')),
             ],
           ),
           IconButton(
@@ -1523,50 +1373,55 @@ void _generateShareUrl() {
             onPressed: () => _scaffoldKey.currentState?.openEndDrawer(),
           ),
         ],
-      ),
-      body: FlutterMap(
-        mapController: mapController,
+      );
+
+  Widget _buildMap() => FlutterMap(
+        mapController: _mapController,
         options: MapOptions(
           initialCenter: const LatLng(36.555, 139.882),
           initialZoom: 17.0,
           onTap: _addPoint,
         ),
         children: [
-          TileLayer(urlTemplate: getTileUrl(), userAgentPackageName: 'com.example.sideGutter_map'),
-          ...layers.where((layer) => layer.visible).expand((layer) => [
-                PolylineLayer(
-                polylines: layer.gutters.map((g) => Polyline(
-                  points: g.points,
-                  color: _getGutterColor(g, layer),   // ← ここを変更
-                  strokeWidth: g.strokeWidth,
-                  borderStrokeWidth: 2.5,
-                  borderColor: Colors.white,
-                )).toList(),
-              ),
-              ]),
-
-          // 新規追加中のライン（変更なし）
+          TileLayer(
+            urlTemplate: _kTileUrls[currentTile] ?? _kTileUrls['osm']!,
+            userAgentPackageName: 'com.example.sideGutter_map',
+          ),
+          // 各レイヤーのポリライン
+          ...layers.where((l) => l.visible).map((layer) => PolylineLayer(
+                polylines: layer.gutters
+                    .map((g) => Polyline(
+                          points: g.points,
+                          color: _getGutterColor(g, layer),
+                          strokeWidth: g.strokeWidth,
+                          borderStrokeWidth: 2.5,
+                          borderColor: Colors.white,
+                        ))
+                    .toList(),
+              )),
+          // 新規追加中のプレビューライン
           if (isAddingNew && newPoints.isNotEmpty)
             PolylineLayer(
-              polylines: [Polyline(points: newPoints, color: Colors.orange, strokeWidth: 7.5)],
+              polylines: [
+                Polyline(
+                    points: newPoints, color: Colors.orange, strokeWidth: 7.5),
+              ],
             ),
-          // 流向矢印（Polygon）
-          ..._createFlowArrowPolygons().map((p) => PolygonLayer(
-                polygons: [p],
-                polygonCulling: false,
-              )),
-          ],
-      ),
-            endDrawer: Drawer(
+          // 流向矢印
+          ..._createFlowArrowPolygons()
+              .map((p) => PolygonLayer(polygons: [p], polygonCulling: false)),
+        ],
+      );
+
+  /// レイヤー管理ドロワー
+  Widget _buildDrawer() => Drawer(
         child: Column(
           children: [
             const DrawerHeader(
               decoration: BoxDecoration(color: Colors.blue),
               child: Center(
-                child: Text(
-                  'レイヤー管理',
-                  style: TextStyle(color: Colors.white, fontSize: 20),
-                ),
+                child: Text('レイヤー管理',
+                    style: TextStyle(color: Colors.white, fontSize: 20)),
               ),
             ),
             Expanded(
@@ -1577,13 +1432,13 @@ void _generateShareUrl() {
                   return ListTile(
                     leading: Checkbox(
                       value: layer.visible,
-                      onChanged: (val) {
-                        setState(() => layer.visible = val!);
-                      },
+                      onChanged: (v) => setState(() => layer.visible = v!),
                     ),
                     title: Text(layer.name),
-                    subtitle: Text('${layer.gutters.length} 本'
-                        '${layer.categoryKey != null ? " ・ ${layer.categoryKey}" : ""}'),
+                    subtitle: Text(
+                      '${layer.gutters.length} 本'
+                      '${layer.categoryKey != null ? " ・ ${layer.categoryKey}" : ""}',
+                    ),
                     onTap: () {
                       setState(() => selectedLayerIndex = index);
                       Navigator.pop(context);
@@ -1596,52 +1451,44 @@ void _generateShareUrl() {
                           tooltip: 'カテゴリ色分け設定',
                           onPressed: () => _showCategoryStylingDialog(index),
                         ),
-
                         IconButton(
                           icon: const Icon(Icons.edit),
                           tooltip: 'レイヤー名変更',
                           onPressed: () => _renameLayer(index),
                         ),
-
                         IconButton(
                           icon: const Icon(Icons.delete),
                           tooltip: 'レイヤー削除',
-                          onPressed: () {
-                            showDialog(
-                              context: context,
-                              builder: (_) => AlertDialog(
-                                title: const Text('レイヤー削除'),
-                                content: Text(
-                                  '「${layer.name}」を削除しますか？',
+                          onPressed: () => showDialog(
+                            context: context,
+                            builder: (_) => AlertDialog(
+                              title: const Text('レイヤー削除'),
+                              content: Text('「${layer.name}」を削除しますか？'),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(context),
+                                  child: const Text('キャンセル'),
                                 ),
-                                actions: [
-                                  TextButton(
-                                    onPressed: () => Navigator.pop(context),
-                                    child: const Text('キャンセル'),
-                                  ),
-                                  TextButton(
-                                    onPressed: () {
-                                      setState(() {
-                                        layers.removeAt(index);
-
-                                        // 選択中レイヤー調整
-                                        if (selectedLayerIndex != null &&
-                                            selectedLayerIndex! >= layers.length) {
-                                          selectedLayerIndex = layers.isEmpty
+                                TextButton(
+                                  onPressed: () {
+                                    setState(() {
+                                      layers.removeAt(index);
+                                      // 削除後に選択インデックスが範囲外になる場合に補正
+                                      if (selectedLayerIndex != null &&
+                                          selectedLayerIndex! >= layers.length) {
+                                        selectedLayerIndex = layers.isEmpty
                                             ? null
                                             : layers.length - 1;
-                                        }
-                                      });
-
-                                      Navigator.pop(context);
-                                    },
-                                    child: const Text('削除'),
-                                    ),
-                                ]
-                              )
-                            );
-                          }
-                        )
+                                      }
+                                    });
+                                    Navigator.pop(context);
+                                  },
+                                  child: const Text('削除'),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
                       ],
                     ),
                   );
@@ -1656,80 +1503,67 @@ void _generateShareUrl() {
             ),
           ],
         ),
-      ),
-      floatingActionButton: Column(
-        mainAxisAlignment: MainAxisAlignment.end,
-        children: [
-          FloatingActionButton(heroTag: "all", mini: true, onPressed: _showAllGutters, child: const Icon(Icons.fullscreen)),
-          const SizedBox(height: 8),
-          if (isAddingNew)
-            FloatingActionButton(heroTag: "save", onPressed: _saveNewGutter, child: const Icon(Icons.save)),
-          const SizedBox(height: 8),
-          FloatingActionButton(
-            heroTag: "cut",
-            backgroundColor: isCutting ? Colors.purple : null,
-            onPressed: _toggleCutMode,
-            child: const Icon(Icons.content_cut),
-          ),
-          const SizedBox(height: 8),
-          FloatingActionButton(
-            heroTag: "add",
-            backgroundColor: isAddingNew ? Colors.red : Colors.green,
-            onPressed: _toggleAddMode,
-            child: Icon(isAddingNew ? Icons.close : Icons.add),
-          ),
-          const SizedBox(height: 8),
-          FloatingActionButton(heroTag: "location", onPressed: _getCurrentLocation, child: const Icon(Icons.my_location)),
-          const SizedBox(height: 8),
-          FloatingActionButton(heroTag: "load", onPressed: _loadGeoJSON, child: const Icon(Icons.upload_file)),
-          const SizedBox(height: 8),
-          FloatingActionButton(heroTag: "export", onPressed: _exportGeoJSON, child: const Icon(Icons.download)),
-          FloatingActionButton(
-            heroTag: "url_load",
-            onPressed: () {
-              final controller = TextEditingController();
-              showDialog(
-                context: context,
-                builder: (ctx) => AlertDialog(
-                  title: const Text('GeoJSON URLから読み込み'),
-                  content: TextField(
-                    controller: controller,
-                    decoration: const InputDecoration(hintText: 'https://gist.githubusercontent.com/...'),
-                    maxLines: 3,
-                  ),
-                  actions: [
-                    TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('キャンセル')),
-                    TextButton(
-                      onPressed: () {
-                        Navigator.pop(ctx);
-                        if (controller.text.trim().isNotEmpty) {
-                          _loadGeoJSONFromUrl(controller.text.trim());
-                        }
-                      },
-                      child: const Text('読み込み'),
-                    ),
-                  ],
-                ),
-              );
-            },
-            
-            child: const Icon(Icons.link),
-          ),
-          const SizedBox(height: 8),
-          FloatingActionButton(
-            heroTag: "share_url",
-            onPressed: _generateShareUrl,
-            child: const Icon(Icons.share),
-          ),
+      );
 
-          const SizedBox(height: 8),
-          FloatingActionButton(
-            heroTag: "upload",
-            onPressed: _uploadCurrentLayer,
-            child: const Icon(Icons.cloud_upload),
-          ),
-        ],
+  /// FABを1つ生成するヘルパー
+  FloatingActionButton _fab({
+    required String tag,
+    required IconData icon,
+    required VoidCallback onPressed,
+    Color? color,
+    bool mini = false,
+  }) =>
+      FloatingActionButton(
+        heroTag: tag,
+        mini: mini,
+        backgroundColor: color,
+        onPressed: onPressed,
+        child: Icon(icon),
+      );
+
+  /// フローティングアクションボタン群
+  /// FAB間には一定のスペース(8px)を挿入する
+  Widget _buildFab() {
+    final fabs = <Widget>[
+      _fab(tag: 'all', icon: Icons.fullscreen, onPressed: _showAllGutters, mini: true),
+      if (isAddingNew)
+        _fab(tag: 'save', icon: Icons.save, onPressed: _saveNewGutter),
+      _fab(
+        tag: 'cut',
+        icon: Icons.content_cut,
+        onPressed: _toggleCutMode,
+        color: isCutting ? Colors.purple : null,
       ),
-    );
+      _fab(
+        tag: 'add',
+        icon: isAddingNew ? Icons.close : Icons.add,
+        onPressed: _toggleAddMode,
+        color: isAddingNew ? Colors.red : Colors.green,
+      ),
+      _fab(tag: 'location', icon: Icons.my_location, onPressed: _getCurrentLocation),
+      _fab(tag: 'load', icon: Icons.upload_file, onPressed: _loadGeoJSON),
+      _fab(tag: 'export', icon: Icons.download, onPressed: _exportGeoJSON),
+      _fab(
+        tag: 'url_load',
+        icon: Icons.link,
+        onPressed: () => _showUrlInputDialog(
+          title: 'GeoJSON URLから読み込み',
+          hint: 'https://gist.githubusercontent.com/...',
+          actionLabel: '読み込み',
+          onSubmit: _loadGeoJSONFromUrl,
+        ),
+      ),
+      _fab(tag: 'share_url', icon: Icons.share, onPressed: _generateShareUrl),
+      _fab(tag: 'upload', icon: Icons.cloud_upload, onPressed: _uploadCurrentLayer),
+    ];
+
+    // FAB間に8pxのスペースを挿入
+    final spaced = <Widget>[];
+    for (int i = 0; i < fabs.length; i++) {
+      spaced.add(fabs[i]);
+      if (i < fabs.length - 1) spaced.add(const SizedBox(height: 8));
+    }
+
+    return Column(mainAxisAlignment: MainAxisAlignment.end, children: spaced);
   }
 }
