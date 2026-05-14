@@ -566,6 +566,21 @@ void _generateShareUrl() {
           content: SelectableText(shareUrl),
           actions: [
             TextButton(
+              onPressed: () {
+                Clipboard.setData(
+                  ClipboardData(text: shareUrl),
+                );
+
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('URLをコピーしました'),
+                  ),
+                );
+              },
+              child: const Text('コピー'),
+            ),
+
+            TextButton(
               onPressed: () => Navigator.pop(context),
               child: const Text('閉じる'),
             ),
