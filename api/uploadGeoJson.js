@@ -1,5 +1,10 @@
 export default async function handler(req, res) {
   try {
+    console.log('TOKEN EXISTS:', !!process.env.GITHUB_TOKEN);
+      console.log(
+        'TOKEN START:',
+        process.env.GITHUB_TOKEN?.substring(0, 10)
+      );
     if (req.method !== 'POST') {
       return res.status(405).json({ error: 'Method not allowed' });
     }
