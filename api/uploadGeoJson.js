@@ -18,8 +18,8 @@ export default async function handler(req, res) {
     // =========================
     // GitHub設定
     // =========================
-    const owner = 'tomi1090';
-    const repo = 'side-gutter-map';
+    const owner = 'tomi-1090';
+    const repo = 'side-gutters-map';
 
     // ファイル名
     const fileId = Date.now();
