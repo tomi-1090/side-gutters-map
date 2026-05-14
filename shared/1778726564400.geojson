@@ -1,0 +1,25 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [
+            139.88226822090152,
+            36.55396148564803
+          ],
+          [
+            139.88287976455692,
+            36.5551852936246
+          ]
+        ]
+      },
+      "properties": {
+        "id": "SG-001",
+        "name": "側溝 SG-001"
+      }
+    }
+  ]
+}
