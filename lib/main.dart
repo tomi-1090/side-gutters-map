@@ -984,7 +984,14 @@ void _generateShareUrl() {
                   );
                 },
               ),
-              
+              TextButton.icon(
+              icon: const Icon(Icons.edit_note),
+              label: const Text('詳細編集'),   // ← 新規追加
+              onPressed: () {
+                Navigator.pop(ctx);                    // 現在のダイアログを閉じる
+                _showGutterEditDialog(gutter);         // 断面形状・口径・メモ編集画面を開く
+              },
+            ),              
             TextButton(
               onPressed: () {
                 // 編集した値をpropertiesに戻す
@@ -1105,6 +1112,143 @@ void _generateShareUrl() {
       ));
     });
     _saveToLocalStorage();// 保存処理
+  }
+
+    void _showGutterEditDialog(Gutter gutter) {
+    final memoController = TextEditingController(text: gutter.memo);
+    final shapeController = TextEditingController(text: gutter.shape);
+    final diameterController = TextEditingController(text: gutter.diameter);
+
+    // 候補リスト
+    final shapeOptions = ['open', 'box', 'circle', 'other'];
+    final shapeLabels = {
+      'open': '開渠',
+      'box': 'BOX',
+      'circle': '円形',
+      'other': 'その他',
+    };
+
+    final diameterOptions = [
+      '300×300', '400×400', '500×500', '600×600',
+      '700×700', '800×800', '900×900', '1000×1000',
+      '300×400', '400×500', '500×600'
+    ];
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(gutter.id),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // === 断面形状 ===
+              Autocomplete<String>(
+                initialValue: TextEditingValue(text: gutter.shape),
+                optionsBuilder: (TextEditingValue textEditingValue) {
+                  if (textEditingValue.text.isEmpty) {
+                    return shapeOptions;
+                  }
+                  return shapeOptions.where((option) =>
+                      option.toLowerCase().contains(textEditingValue.text.toLowerCase()) ||
+                      (shapeLabels[option] ?? '').contains(textEditingValue.text));
+                },
+                displayStringForOption: (option) => shapeLabels[option] ?? option,
+                onSelected: (String selection) {
+                  shapeController.text = selection;
+                },
+                fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
+                  shapeController.text = controller.text; // 同期
+                  return TextFormField(
+                    controller: controller,
+                    focusNode: focusNode,
+                    decoration: const InputDecoration(
+                      labelText: '断面形状',
+                      border: OutlineInputBorder(),
+                      hintText: '開渠 / BOX / 円形 など',
+                    ),
+                  );
+                },
+              ),
+
+              const SizedBox(height: 20),
+
+              // === 口径 ===
+              Autocomplete<String>(
+                initialValue: TextEditingValue(text: gutter.diameter),
+                optionsBuilder: (TextEditingValue textEditingValue) {
+                  if (textEditingValue.text.isEmpty) {
+                    return diameterOptions;
+                  }
+                  return diameterOptions.where((option) =>
+                      option.contains(textEditingValue.text));
+                },
+                onSelected: (String selection) {
+                  diameterController.text = selection;
+                },
+                fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
+                  diameterController.text = controller.text;
+                  return TextFormField(
+                    controller: controller,
+                    focusNode: focusNode,
+                    decoration: const InputDecoration(
+                      labelText: '口径（サイズ）',
+                      border: OutlineInputBorder(),
+                      hintText: '300×300 など（自由入力可）',
+                    ),
+                    keyboardType: TextInputType.text,
+                  );
+                },
+              ),
+
+              const SizedBox(height: 20),
+
+              // === メモ ===
+              TextField(
+                controller: memoController,
+                maxLines: 4,
+                decoration: const InputDecoration(
+                  labelText: 'メモ',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+
+              const SizedBox(height: 16),
+
+              // 流向反転
+              SwitchListTile(
+                title: const Text('流向を反転'),
+                value: gutter.flowReversed,
+                onChanged: (v) {
+                  setState(() => gutter.flowReversed = v);
+                },
+                contentPadding: EdgeInsets.zero,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('キャンセル'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              setState(() {
+                gutter.shape = shapeController.text.trim();
+                gutter.diameter = diameterController.text.trim();
+                gutter.memo = memoController.text.trim();
+              });
+              Navigator.pop(ctx);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('保存しました')),
+              );
+            },
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
   }
   // ==================== カテゴリ色分けロジック ====================
   Color _getGutterColor(Gutter gutter, GutterLayer layer) {
