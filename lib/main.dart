@@ -156,8 +156,11 @@ class _MapPageState extends State<MapPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
             final geojsonUrl =     Uri.decodeComponent(Uri.base.queryParameters['geojson'] ?? '',);
               _loadGeoJSONFromUrl(geojsonUrl);
-    });
-  }
+              http.get(
+                Uri.parse(geojsonUrl),
+                );
+      });
+    }
 
   // ==================== URLからGeoJSON読み込み（新規追加） ====================
   Future<void> _loadGeoJSONFromUrl(String url) async {
@@ -265,7 +268,7 @@ void _generateShareUrl() {
 
             // 現在のVercel URL取得
             final baseUrl =
-                '${web.window.location.origin}${web.window.location.pathname}';
+            '${web.window.location.origin}/';
 
             // geojson パラメータ付きURL生成
             final shareUrl =
