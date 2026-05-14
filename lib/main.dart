@@ -154,7 +154,7 @@ class _MapPageState extends State<MapPage> {
 
     // URLパラメータから自動読み込み
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final uri = Uri.parse(web.window.location.href);
+      final uri = Uri.parse('${web.window.location.origin}/api/uploadGeoJson',  );
       final geojsonUrl = uri.queryParameters['geojson'];
       if (geojsonUrl != null && geojsonUrl.isNotEmpty) {
         _loadGeoJSONFromUrl(geojsonUrl);
