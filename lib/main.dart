@@ -154,11 +154,8 @@ class _MapPageState extends State<MapPage> {
 
     // URLパラメータから自動読み込み
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final uri = Uri.parse('${web.window.location.origin}/api/uploadGeoJson',  );
-      final geojsonUrl = uri.queryParameters['geojson'];
-      if (geojsonUrl != null && geojsonUrl.isNotEmpty) {
-        _loadGeoJSONFromUrl(geojsonUrl);
-      }
+            final geojsonUrl =     Uri.decodeComponent(Uri.base.queryParameters['geojson'] ?? '',);
+              _loadGeoJSONFromUrl(geojsonUrl);
     });
   }
 
@@ -241,75 +238,77 @@ class _MapPageState extends State<MapPage> {
   }
 
   // ==================== GeoJSON共有URL生成 ====================
-  void _generateShareUrl() {
-    final controller = TextEditingController();
+void _generateShareUrl() {
+  final controller = TextEditingController();
 
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('GeoJSON共有URL生成'),
-        content: TextField(
-          controller: controller,
-          decoration: const InputDecoration(
-            hintText: 'https://raw.githubusercontent.com/...',
-          ),
-          maxLines: 3,
+  showDialog(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('GeoJSON共有URL生成'),
+      content: TextField(
+        controller: controller,
+        decoration: const InputDecoration(
+          hintText: 'https://raw.githubusercontent.com/...',
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('キャンセル'),
-          ),
-          TextButton(
-            onPressed: () async {
-              final geojsonUrl = controller.text.trim();
-
-              if (geojsonUrl.isEmpty) return;
-
-              // 現在のVercel URL取得
-              final baseUrl =
-                  '${web.window.location.origin}${web.window.location.pathname}';
-
-              // geojson パラメータ付きURL生成
-              final shareUrl =
-                  '$baseUrl?geojson=${Uri.encodeComponent(geojsonUrl)}';
-
-              // クリップボードへコピー
-              await Clipboard.setData(
-                ClipboardData(text: shareUrl),
-              );
-
-              Navigator.pop(ctx);
-
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('共有URLをコピーしました'),
-                  ),
-                );
-              }
-
-              // URL表示ダイアログ
-              showDialog(
-                context: context,
-                builder: (_) => AlertDialog(
-                  title: const Text('共有URL'),
-                  content: SelectableText(shareUrl),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text('閉じる'),
-                    ),
-                  ],
-                ),
-              );
-            },
-            child: const Text('生成'),
-          ),
-        ],
+        maxLines: 3,
       ),
-    );
-  }
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(dialogContext),
+          child: const Text('キャンセル'),
+        ),
+        TextButton(
+          onPressed: () {
+            final geojsonUrl = controller.text.trim();
+
+            if (geojsonUrl.isEmpty) return;
+
+            // 現在のVercel URL取得
+            final baseUrl =
+                '${web.window.location.origin}${web.window.location.pathname}';
+
+            // geojson パラメータ付きURL生成
+            final shareUrl =
+                '$baseUrl?geojson=${Uri.encodeComponent(geojsonUrl)}';
+
+            // クリップボードへコピー
+            Clipboard.setData(
+              ClipboardData(text: shareUrl),
+            );
+
+            if (!context.mounted) return;
+
+            Navigator.pop(dialogContext);
+
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('共有URLをコピーしました'),
+              ),
+            );
+
+            if (!context.mounted) return;
+
+            // URL表示ダイアログ
+            showDialog(
+              context: context,
+              builder: (_) => AlertDialog(
+                title: const Text('共有URL'),
+                content: SelectableText(shareUrl),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(dialogContext),
+                    child: const Text('閉じる'),
+                  ),
+                ],
+              ),
+            );
+          },
+          child: const Text('生成'),
+        ),
+      ],
+    ),
+  );
+}
 
   // ==================== 以下はあなたの元のコードをそのまま使用 ====================
   String getTileUrl() {
