@@ -1,0 +1,25 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [
+            139.88456419181827,
+            36.55359951056073
+          ],
+          [
+            139.884521276474,
+            36.55447858997444
+          ]
+        ]
+      },
+      "properties": {
+        "id": "SG-001",
+        "name": "300×300"
+      }
+    }
+  ]
+}
