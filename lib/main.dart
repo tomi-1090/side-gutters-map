@@ -551,9 +551,9 @@ void _generateShareUrl() {
 
     // 共有URL
     final shareUrl =
-        '${web.window.location.origin}'
+        '${web.window.location.origin}/'
         '?geojson=${Uri.encodeComponent(rawUrl)}';
-
+    
     await Clipboard.setData(
       ClipboardData(text: shareUrl),
     );
