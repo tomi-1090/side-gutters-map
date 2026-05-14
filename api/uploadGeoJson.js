@@ -38,7 +38,7 @@ export default async function handler(req, res) {
     const githubRes = await fetch(apiUrl, {
       method: 'PUT',
       headers: {
-        Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
+        Authorization: `token ${process.env.GITHUB_TOKEN}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
