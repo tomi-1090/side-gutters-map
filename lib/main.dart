@@ -231,7 +231,8 @@ Future<void> _loadOnlyFromUrl(String url) async {
         data['features'] as List<dynamic>? ?? []);
 
     _addParsedLayer(gutters, '共有データ ${DateTime.now().toIso8601String().substring(0,10)}');
-    
+    await _saveToLocalStorage();   // これを追加
+    _showAllGutters();
     _showAllGutters();
     _showSnackBar('${gutters.length}本の側溝を読み込みました（ローカルデータはクリア）');
   } catch (e) {
@@ -339,26 +340,22 @@ List<Gutter> _parseGeoJsonFeatures(List<dynamic> features) {
 
     final props = f['properties'] ?? {};
 
-    // ★★★ 優先順位を明確に（共有データ対応強化）★★★
-    String shape = props['shape']?.toString() ?? 
-                   props['断面形状']?.toString() ?? 'open';
-    
-    String diameter = props['diameter']?.toString() ?? 
-                      props['口径']?.toString() ?? '300×300';
-    
-    String memo = props['memo']?.toString() ?? 
-                  props['メモ']?.toString() ?? '';
+    // 複数のキー名に対応（共有データ対策）
+    final shape = props['shape']?.toString() ?? 
+                 props['断面形状']?.toString() ?? 'open';
+    final diameter = props['diameter']?.toString() ?? 
+                     props['口径']?.toString() ?? '300×300';
+    final memo = props['memo']?.toString() ?? 
+                 props['メモ']?.toString() ?? '';
 
     gutters.add(Gutter(
-      id: props['id']?.toString() ?? 'SG-${DateTime.now().millisecondsSinceEpoch}',
+      id: props['id']?.toString() ?? 'SG-1',
       name: props['name']?.toString() ?? '',
       shape: shape,
       diameter: diameter,
       memo: memo,
       flowReversed: props['flowReversed'] as bool? ?? false,
-      color: props['color'] != null 
-          ? Color(props['color'] as int) 
-          : Colors.blue,
+      color: props['color'] != null ? Color(props['color'] as int) : Colors.blue,
       strokeWidth: (props['strokeWidth'] as num?)?.toDouble() ?? 7.5,
       showArrow: props['showArrow'] as bool? ?? false,
       arrowSize: (props['arrowSize'] as num?)?.toDouble() ?? 12.0,
