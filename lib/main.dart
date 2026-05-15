@@ -244,31 +244,54 @@ Future<void> _loadOnlyFromUrl(String url) async {
   // ローカルストレージ
   // ================================================================
   Future<void> _saveToLocalStorage() async {
-    try {
+  try {
+    final jsonString = jsonEncode(layers.map((l) => l.toJson()).toList());
+    
+    // Webでは dart:html の localStorage を直接使う（より安定）
+    if (web.window.localStorage != null) {
+      web.window.localStorage.setItem('layers_data', jsonString);
+      debugPrint('✅ Web localStorage 保存完了');
+    } else {
+      // fallback
       final prefs = await SharedPreferences.getInstance();
-      final jsonString = jsonEncode(layers.map((l) => l.toJson()).toList());
       await prefs.setString('layers_data', jsonString);
-      debugPrint('✅ 保存完了: ${layers.length}レイヤー, ${layers.fold(0, (sum, l) => sum + l.gutters.length)}本');
-    } catch (e) {
-      debugPrint('❌ 保存エラー: $e');
-      _showSnackBar('保存エラー: $e');
     }
+    
+    debugPrint('保存完了: ${layers.length}レイヤー');
+  } catch (e) {
+    debugPrint('❌ 保存エラー: $e');
+    _showSnackBar('保存エラー: $e');
   }
+}
 
   Future<void> _loadFromLocalStorage() async {
-    final prefs = await SharedPreferences.getInstance();
-    final data = prefs.getString('layers_data');
-    if (data == null || data.isEmpty) return;
-    try {
-      setState(() {
-        layers = (jsonDecode(data) as List<dynamic>)
-            .map((j) => GutterLayer.fromJson(j as Map<String, dynamic>))
-            .toList();
-      });
-    } catch (e) {
-      debugPrint('レイヤー読み込みエラー: $e');
+  try {
+    String? data;
+
+    // Web localStorage優先
+    if (web.window.localStorage != null) {
+      data = web.window.localStorage.getItem('layers_data');
     }
+
+    // fallbackでSharedPreferences
+    if (data == null || data.isEmpty) {
+      final prefs = await SharedPreferences.getInstance();
+      data = prefs.getString('layers_data');
+    }
+
+    if (data == null || data.isEmpty) return;
+
+    setState(() {
+      layers = (jsonDecode(data!) as List<dynamic>)
+          .map((j) => GutterLayer.fromJson(j as Map<String, dynamic>))
+          .toList();
+    });
+    
+    debugPrint('✅ 読み込み完了: ${layers.length}レイヤー');
+  } catch (e) {
+    debugPrint('❌ 読み込みエラー: $e');
   }
+}
 
   // ================================================================
   // GeoJSON パース（共通ロジック）
@@ -919,12 +942,11 @@ Future<void> _uploadAllLayers() async {
                       TextButton.icon(
                         icon: const Icon(Icons.swap_horiz),
                         label: const Text('反転'),
-                        onPressed: () {
-                          setState(() => g.points = g.points.reversed.toList());
-                          _saveToLocalStorage();
-                          setS(() {}); // 再描画
-                          _showSnackBar('流向を反転しました');
-                        },
+                        onPressed: () async {
+                            setState(() => g.points = g.points.reversed.toList());
+                            await _saveToLocalStorage();
+                            _showSnackBar('流向を反転しました');
+                          },
                       ),
                     ],
                   ),
@@ -994,23 +1016,23 @@ Future<void> _uploadAllLayers() async {
                       ),
                       Expanded(
                         child: ElevatedButton(
-                          onPressed: () async {
-                            setState(() {
-                              g.name = nameCtrl.text;
-                              g.shape = shapeCtrl.text.trim();
-                              g.diameter = diamCtrl.text.trim();
-                              g.memo = memCtrl.text.trim();
-                            });
-                            
-                            await _saveToLocalStorage();     // ← await を追加
-                            
-                            if (mounted) {
-                              Navigator.pop(ctx);
-                              _showSnackBar('保存しました');
-                            }
-                          },
-                          child: const Text('保存'),
-                        ),
+                        onPressed: () async {
+                          setState(() {
+                            g.name = nameCtrl.text;
+                            g.shape = shapeCtrl.text.trim();
+                            g.diameter = diamCtrl.text.trim();
+                            g.memo = memCtrl.text.trim();
+                          });
+                          
+                          await _saveToLocalStorage();   // 確実に待つ
+                          
+                          if (mounted) {
+                            Navigator.pop(ctx);
+                            _showSnackBar('保存しました');
+                          }
+                        },
+                        child: const Text('保存'),
+                      ),
                       ),
                     ],
                   ),
