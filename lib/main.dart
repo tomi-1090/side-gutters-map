@@ -758,365 +758,259 @@ Future<void> _uploadAllLayers() async {
   // ================================================================
   // Gutter 情報表示・編集
   // ================================================================
-  /// 属性情報の閲覧ダイアログ（編集・削除へ遷移できる）
-void _showGutterInfo(Gutter g) {
-  showModalBottomSheet(
-    context: context,
-    isScrollControlled: true,
-    useRootNavigator: true,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-    ),
-    builder: (ctx) => Padding(
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.of(context).viewInsets.bottom,
+  /// 属性情報の閲覧（シンプル版）
+  void _showGutterInfo(Gutter g) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      useRootNavigator: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      child: SingleChildScrollView(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                g.name.isNotEmpty ? g.name : '属性情報',
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-              const Divider(height: 24),
-              Text('ID: ${g.id}'),
-              const SizedBox(height: 12),
-              ...g.properties.entries.map((e) => Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 6),
-                    child: Text('${e.key}: ${e.value}'),
-                  )),
-              const SizedBox(height: 24),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextButton(
-                      onPressed: () => Navigator.pop(ctx),
-                      child: const Text('閉じる'),
-                    ),
-                  ),
-                  Expanded(
-                    child: TextButton(
-                      onPressed: () {
-                        Navigator.pop(ctx);
-                        _showEditForm(g);
-                      },
-                      child: const Text('編集'),
-                    ),
-                  ),
-                  Expanded(
-                    child: TextButton(
-                      onPressed: () {
-                        Navigator.pop(ctx);
-                        _confirmDelete(g);
-                      },
-                      child: const Text('削除',
-                          style: TextStyle(color: Colors.red)),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    ),
-  );
-}
-
-  /// スタイル・属性の編集フォーム（色・矢印・太さ・プロパティ）（BottomSheet版）
-void _showEditForm(Gutter g) {
-  if (_currentLayer == null) return;
-
-  final nameCtrl = TextEditingController(text: g.name);
-
-  showModalBottomSheet(
-    context: context,
-    isScrollControlled: true,
-    useRootNavigator: true,
-    backgroundColor: Colors.white,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-    ),
-    builder: (ctx) => StatefulBuilder(
-      builder: (context, setS) => Padding(
+      builder: (ctx) => Padding(
         padding: EdgeInsets.only(
           bottom: MediaQuery.of(context).viewInsets.bottom,
         ),
         child: SingleChildScrollView(
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+            padding: const EdgeInsets.all(20),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  g.name.isNotEmpty ? g.name : '属性編集',
+                  g.name.isNotEmpty ? g.name : '側溝情報',
                   style: Theme.of(context).textTheme.titleLarge,
                 ),
                 const Divider(height: 24),
 
-                // 名称
-                TextField(
-                  controller: nameCtrl,
-                  decoration: const InputDecoration(labelText: '名称'),
-                  onChanged: (v) => g.name = v,
-                ),
-                const SizedBox(height: 16),
-
-                // ライン色
-                const Text('ライン色', style: TextStyle(fontWeight: FontWeight.bold)),
-                Wrap(
-                  children: _kColorPalette
-                      .map((c) => GestureDetector(
-                            onTap: () => setS(() => g.color = c),
-                            child: Container(
-                              width: 48,
-                              height: 48,
-                              margin: const EdgeInsets.all(6),
-                              decoration: BoxDecoration(
-                                color: c,
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                  color: g.color == c ? Colors.black : Colors.transparent,
-                                  width: 3,
-                                ),
-                              ),
-                            ),
-                          ))
-                      .toList(),
-                ),
-                const SizedBox(height: 20),
-
-                // 流向矢印
-                CheckboxListTile(
-                  title: const Text('終点に流向矢印を表示'),
-                  value: g.showArrow,
-                  onChanged: (v) => setS(() => g.showArrow = v ?? false),
-                  contentPadding: EdgeInsets.zero,
-                ),
-                if (g.showArrow) ...[
-                  const Text('矢印サイズ'),
-                  Slider(
-                    value: g.arrowSize,
-                    min: 5.0,
-                    max: 20.0,
-                    divisions: 30,
-                    label: g.arrowSize.toStringAsFixed(1),
-                    onChanged: (v) => setS(() => g.arrowSize = v),
-                  ),
-                ],
-                const SizedBox(height: 16),
-
-                // ラインの太さ
-                const Text('ラインの太さ'),
-                Slider(
-                  value: g.strokeWidth,
-                  min: 3.0,
-                  max: 15.0,
-                  divisions: 24,
-                  label: g.strokeWidth.toStringAsFixed(1),
-                  onChanged: (v) => setS(() => g.strokeWidth = v),
-                ),
-
+                Text('形状: ${_kShapeLabels[g.shape] ?? g.shape}'),
+                const SizedBox(height: 8),
+                Text('口径: ${g.diameter}'),
+                const SizedBox(height: 8),
+                Text('メモ: ${g.memo.isEmpty ? "なし" : g.memo}'),
+                const SizedBox(height: 8),
+                Text('流向矢印: ${g.showArrow ? "表示" : "非表示"}'),
                 const SizedBox(height: 24),
 
-                // === ここに操作ボタンを追加 ===
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    // 流向反転
-                    TextButton.icon(
-                      icon: const Icon(Icons.swap_horiz),
-                      label: const Text('流向反転'),
-                      onPressed: () {
-                        setState(() => g.points = g.points.reversed.toList());
-                        _saveToLocalStorage();
-                        _showSnackBar('流向を反転しました');
-                      },
-                    ),
-
-                    // 詳細編集
-                    TextButton.icon(
-                      icon: const Icon(Icons.edit_note),
-                      label: const Text('詳細編集'),
-                      onPressed: () {
-                        Navigator.pop(ctx);           // 現在のBottomSheetを閉じる
-                        _showGutterDetailDialog(g);   // 詳細編集を開く
-                      },
-                    ),
-                  ],
-                ),
-
-                const SizedBox(height: 30),
-
-                // 保存・キャンセル
                 Row(
                   children: [
                     Expanded(
                       child: TextButton(
                         onPressed: () => Navigator.pop(ctx),
-                        child: const Text('キャンセル'),
+                        child: const Text('閉じる'),
                       ),
                     ),
                     Expanded(
                       child: ElevatedButton(
                         onPressed: () {
-                          // 名前をコントローラーから反映
-                          g.name = nameCtrl.text;
-                          setState(() {});
-                          _saveToLocalStorage();
                           Navigator.pop(ctx);
-                          _showSnackBar('保存しました');
+                          _showEditForm(g);
                         },
-                        child: const Text('保存'),
+                        child: const Text('編集'),
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 12),
               ],
             ),
           ),
         ),
       ),
-    ),
-  );
-}
-
-  void _confirmDelete(Gutter g) {
-    final layer = _currentLayer;
-    if (layer == null) return;
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('削除確認'),
-        content: Text('${g.name} を削除しますか？'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('キャンセル')),
-          TextButton(
-            onPressed: () {
-              setState(() => layer.gutters.remove(g));
-              _saveToLocalStorage();
-              _showSnackBar('削除しました');
-              Navigator.pop(ctx);
-            },
-            child: const Text('削除', style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
     );
   }
 
-  // ================================================================
-  // 断面形状・口径・メモの詳細編集（BottomSheet版）
-  // ================================================================
-void _showGutterDetailDialog(Gutter g) {
-  final memCtrl = TextEditingController(text: g.memo);
-  final shapeCtrl = TextEditingController(text: g.shape);
-  final diamCtrl = TextEditingController(text: g.diameter);
+/// メイン編集画面（現場で使いやすい構成）
+  void _showEditForm(Gutter g) {
+    if (_currentLayer == null) return;
 
-  showModalBottomSheet(
-    context: context,
-    isScrollControlled: true,
-    useRootNavigator: true,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-    ),
-    builder: (ctx) => Padding(
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.of(context).viewInsets.bottom,
+    final memCtrl = TextEditingController(text: g.memo);
+    final shapeCtrl = TextEditingController(text: g.shape);
+    final diamCtrl = TextEditingController(text: g.diameter);
+    final nameCtrl = TextEditingController(text: g.name);
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      useRootNavigator: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      child: SingleChildScrollView(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('詳細編集 - ${g.id}',
-                  style: Theme.of(context).textTheme.titleLarge),
-              const Divider(height: 24),
-
-              _buildAutocomplete(
-                label: '断面形状',
-                hint: '開渠 / BOX / 円形 など',
-                initial: g.shape,
-                options: _kShapeOptions,
-                display: (o) => _kShapeLabels[o] ?? o,
-                filter: (o, v) =>
-                    o.toLowerCase().contains(v.toLowerCase()) ||
-                    (_kShapeLabels[o] ?? '').contains(v),
-                ctrl: shapeCtrl,
-              ),
-              const SizedBox(height: 20),
-
-              _buildAutocomplete(
-                label: '口径（サイズ）',
-                hint: '300×300 など（自由入力可）',
-                initial: g.diameter,
-                options: _kDiameterOptions,
-                display: (o) => o,
-                filter: (o, v) => o.contains(v),
-                ctrl: diamCtrl,
-              ),
-              const SizedBox(height: 20),
-
-              TextField(
-                controller: memCtrl,
-                maxLines: 4,
-                decoration: const InputDecoration(
-                  labelText: 'メモ',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 20),
-
-              SwitchListTile(
-                title: const Text('流向を反転'),
-                value: g.flowReversed,
-                onChanged: (v) => setState(() => g.flowReversed = v),
-                contentPadding: EdgeInsets.zero,
-              ),
-
-              const SizedBox(height: 30),
-              Row(
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setS) => Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(context).viewInsets.bottom,
+          ),
+          child: SingleChildScrollView(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 30),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
-                    child: TextButton(
-                      onPressed: () => Navigator.pop(ctx),
-                      child: const Text('キャンセル'),
+                  Text('側溝編集 - ${g.id}',
+                      style: Theme.of(context).textTheme.titleLarge),
+                  const Divider(height: 24),
+
+                  // 名称
+                  TextField(
+                    controller: nameCtrl,
+                    decoration: const InputDecoration(labelText: '名称'),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // 形状
+                  _buildAutocomplete(
+                    label: '断面形状',
+                    hint: '開渠 / BOX / 円形',
+                    initial: g.shape,
+                    options: _kShapeOptions,
+                    display: (o) => _kShapeLabels[o] ?? o,
+                    filter: (o, v) =>
+                        o.toLowerCase().contains(v.toLowerCase()) ||
+                        (_kShapeLabels[o] ?? '').contains(v),
+                    ctrl: shapeCtrl,
+                  ),
+                  const SizedBox(height: 16),
+
+                  // 口径
+                  _buildAutocomplete(
+                    label: '口径',
+                    hint: '300×300 など',
+                    initial: g.diameter,
+                    options: _kDiameterOptions,
+                    display: (o) => o,
+                    filter: (o, v) => o.contains(v),
+                    ctrl: diamCtrl,
+                  ),
+                  const SizedBox(height: 16),
+
+                  // メモ
+                  TextField(
+                    controller: memCtrl,
+                    maxLines: 3,
+                    decoration: const InputDecoration(
+                      labelText: 'メモ',
+                      border: OutlineInputBorder(),
                     ),
                   ),
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: () {
-                        setState(() {
-                          g.shape = shapeCtrl.text.trim();
-                          g.diameter = diamCtrl.text.trim();
-                          g.memo = memCtrl.text.trim();
-                        });
-                        Navigator.pop(ctx);
-                        _showSnackBar('保存しました');
-                      },
-                      child: const Text('保存'),
+                  const SizedBox(height: 20),
+
+                  // 流向関連
+                  Row(
+                    children: [
+                      Expanded(
+                        child: SwitchListTile(
+                          title: const Text('流向矢印を表示'),
+                          value: g.showArrow,
+                          onChanged: (v) => setS(() => g.showArrow = v),
+                          contentPadding: EdgeInsets.zero,
+                        ),
+                      ),
+                      TextButton.icon(
+                        icon: const Icon(Icons.swap_horiz),
+                        label: const Text('反転'),
+                        onPressed: () {
+                          setState(() => g.points = g.points.reversed.toList());
+                          _saveToLocalStorage();
+                          setS(() {}); // 再描画
+                          _showSnackBar('流向を反転しました');
+                        },
+                      ),
+                    ],
+                  ),
+
+                  const Divider(height: 32),
+
+                  // スタイル設定（少し下に）
+                  const Text('スタイル設定', style: TextStyle(fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 12),
+
+                  // 色
+                  const Text('色'),
+                  Wrap(
+                    children: _kColorPalette.map((c) => GestureDetector(
+                          onTap: () => setS(() => g.color = c),
+                          child: Container(
+                            width: 44,
+                            height: 44,
+                            margin: const EdgeInsets.all(5),
+                            decoration: BoxDecoration(
+                              color: c,
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: g.color == c ? Colors.black : Colors.transparent,
+                                width: 3,
+                              ),
+                            ),
+                          ),
+                        )).toList(),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // 太さ
+                  const Text('線の太さ'),
+                  Slider(
+                    value: g.strokeWidth,
+                    min: 3.0,
+                    max: 15.0,
+                    divisions: 24,
+                    label: g.strokeWidth.toStringAsFixed(1),
+                    onChanged: (v) => setS(() => g.strokeWidth = v),
+                  ),
+
+                  if (g.showArrow) ...[
+                    const SizedBox(height: 12),
+                    const Text('矢印サイズ'),
+                    Slider(
+                      value: g.arrowSize,
+                      min: 5.0,
+                      max: 20.0,
+                      divisions: 30,
+                      label: g.arrowSize.toStringAsFixed(1),
+                      onChanged: (v) => setS(() => g.arrowSize = v),
                     ),
+                  ],
+
+                  const SizedBox(height: 40),
+
+                  // 保存・キャンセル
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextButton(
+                          onPressed: () => Navigator.pop(ctx),
+                          child: const Text('キャンセル'),
+                        ),
+                      ),
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: () {
+                            setState(() {
+                              g.name = nameCtrl.text;
+                              g.shape = shapeCtrl.text.trim();
+                              g.diameter = diamCtrl.text.trim();
+                              g.memo = memCtrl.text.trim();
+                            });
+                            _saveToLocalStorage();
+                            Navigator.pop(ctx);
+                            _showSnackBar('保存しました');
+                          },
+                          child: const Text('保存'),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
-              const SizedBox(height: 20),
-            ],
+            ),
           ),
         ),
       ),
-    ),
-  );
-}
+    );
+  }
 
   /// オートコンプリート付きテキストフィールドを生成するファクトリメソッド
   Widget _buildAutocomplete({
