@@ -230,7 +230,14 @@ Future<void> _loadOnlyFromUrl(String url) async {
     debugPrint('share_id復元: $shareId');
 
     debugPrint('読み込みURL: $url');
-    final response = await http.get(Uri.parse(cleanUrl));
+    final cacheBuster =
+    DateTime.now().millisecondsSinceEpoch;
+
+    final urlWithCache =
+        '$cleanUrl?v=$cacheBuster';
+
+    final response =
+        await http.get(Uri.parse(urlWithCache));
 
     if (response.statusCode != 200) throw Exception('HTTP ${response.statusCode}');
 
@@ -442,7 +449,12 @@ List<Gutter> _parseGeoJsonFeatures(List<dynamic> features) {
     if (url.isEmpty) return;
     try {
       _showSnackBar('GeoJSONを読み込み中...');
-      final response = await http.get(Uri.parse(url));
+      final cacheBuster =
+    DateTime.now().millisecondsSinceEpoch;
+
+    final response = await http.get(
+      Uri.parse('$url?v=$cacheBuster'),
+    );
       if (response.statusCode != 200) {
         throw Exception('HTTP ${response.statusCode}');
       }
