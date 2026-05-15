@@ -201,11 +201,12 @@ void initState() {
         Uri.base.queryParameters['geojson'] ?? '');
     
     if (geojsonUrl.isNotEmpty) {
-      // URL指定がある場合はローカルデータをクリアしてURLの内容だけを表示
-      _loadOnlyFromUrl(geojsonUrl);
-    } else {
-      _loadFromLocalStorage();
-    }
+    _loadOnlyFromUrl(geojsonUrl);
+  } else {
+    _loadFromLocalStorage();
+    // スマホ対策で少し遅延
+    Future.delayed(const Duration(milliseconds: 300), _loadFromLocalStorage);
+  }
   });
 }
 
@@ -246,21 +247,28 @@ Future<void> _loadOnlyFromUrl(String url) async {
   Future<void> _saveToLocalStorage() async {
   try {
     final jsonString = jsonEncode(layers.map((l) => l.toJson()).toList());
-    
-    // Webでは dart:html の localStorage を直接使う（より安定）
-    if (web.window.localStorage != null) {
+
+    // 1. localStorage（高速）
+    try {
       web.window.localStorage.setItem('layers_data', jsonString);
-      debugPrint('✅ Web localStorage 保存完了');
-    } else {
-      // fallback
+      debugPrint('✅ localStorage 保存成功');
+    } catch (e) {
+      debugPrint('localStorage失敗: $e');
+    }
+
+    // 2. SharedPreferences（fallback）
+    try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('layers_data', jsonString);
+      debugPrint('✅ SharedPreferences 保存成功');
+    } catch (e) {
+      debugPrint('SharedPreferences失敗: $e');
     }
-    
-    debugPrint('保存完了: ${layers.length}レイヤー');
+
+    debugPrint('保存完了: ${layers.length}レイヤー, ${layers.fold<int>(0, (sum, l) => sum + l.gutters.length)}本');
   } catch (e) {
-    debugPrint('❌ 保存エラー: $e');
-    _showSnackBar('保存エラー: $e');
+    debugPrint('❌ 保存全体エラー: $e');
+    _showSnackBar('保存に失敗しました');
   }
 }
 
@@ -268,26 +276,36 @@ Future<void> _loadOnlyFromUrl(String url) async {
   try {
     String? data;
 
-    // Web localStorage優先
-    if (web.window.localStorage != null) {
+    // 優先順位: localStorage → SharedPreferences
+    try {
       data = web.window.localStorage.getItem('layers_data');
+      if (data != null && data.isNotEmpty) {
+        debugPrint('✅ localStorageから読み込み成功');
+      }
+    } catch (e) {
+      debugPrint('localStorage読み込み失敗: $e');
     }
 
-    // fallbackでSharedPreferences
     if (data == null || data.isEmpty) {
       final prefs = await SharedPreferences.getInstance();
       data = prefs.getString('layers_data');
+      if (data != null && data.isNotEmpty) {
+        debugPrint('✅ SharedPreferencesから読み込み成功');
+      }
     }
 
-    if (data == null || data.isEmpty) return;
+    if (data == null || data.isEmpty) {
+      debugPrint('保存データなし');
+      return;
+    }
 
     setState(() {
       layers = (jsonDecode(data!) as List<dynamic>)
           .map((j) => GutterLayer.fromJson(j as Map<String, dynamic>))
           .toList();
     });
-    
-    debugPrint('✅ 読み込み完了: ${layers.length}レイヤー');
+
+    debugPrint('読み込み完了: ${layers.length}レイヤー');
   } catch (e) {
     debugPrint('❌ 読み込みエラー: $e');
   }
