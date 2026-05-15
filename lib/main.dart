@@ -215,18 +215,22 @@ void initState() {
 Future<void> _loadOnlyFromUrl(String url) async {
   try {
     _showSnackBar('共有URLからデータを読み込み中...');
-    // ★ share_id をURLから復元
-    final uri = Uri.parse(url);
+    final cleanUrl = url.split('?').first;
 
-    final fileName = uri.pathSegments.last; // 12345.geojson
+    final uri = Uri.parse(cleanUrl);
+
+    final fileName = uri.pathSegments.last;
+
     final shareId = fileName.replaceAll('.geojson', '');
 
     web.window.localStorage.setItem('share_id', shareId);
 
+    sharedGeoJsonUrl = cleanUrl;
+
     debugPrint('share_id復元: $shareId');
 
     debugPrint('読み込みURL: $url');
-    final response = await http.get(Uri.parse(url));
+    final response = await http.get(Uri.parse(cleanUrl));
 
     if (response.statusCode != 200) throw Exception('HTTP ${response.statusCode}');
 
@@ -234,8 +238,8 @@ Future<void> _loadOnlyFromUrl(String url) async {
     final gutters = _parseGeoJsonFeatures(
         data['features'] as List<dynamic>? ?? []);
 
-    // ★共有元URLを保持
-      sharedGeoJsonUrl = url;
+    // cachebuster除去
+    sharedGeoJsonUrl = url.split('?').first;
 
       if (gutters.isNotEmpty) {
         _addParsedLayer(
@@ -245,7 +249,7 @@ Future<void> _loadOnlyFromUrl(String url) async {
 
         await _saveToLocalStorage();
       }
-      
+
 
     _showAllGutters();
     _showSnackBar('${gutters.length}本の側溝を読み込みました');
@@ -516,9 +520,15 @@ Future<void> _uploadAllLayers() async {
       _showSnackBar('アップロードするデータがありません');
       return;
     }
-    final shareId =
-    web.window.localStorage.getItem('share_id') ??
-    DateTime.now().millisecondsSinceEpoch.toString();
+    String shareId;
+
+    if (sharedGeoJsonUrl != null) {
+      final uri = Uri.parse(sharedGeoJsonUrl!.split('?').first);
+      final fileName = uri.pathSegments.last;
+      shareId = fileName.replaceAll('.geojson', '');
+    } else {
+      shareId = DateTime.now().millisecondsSinceEpoch.toString();
+    }
 
     web.window.localStorage.setItem('share_id', shareId);
 
