@@ -272,49 +272,48 @@ Future<void> _loadOnlyFromUrl(String url) async {
   /// GeoJSONのfeatures配列からGutterリストを生成する共通処理。
   /// LineString / MultiLineString のみ対象。2点未満はスキップ。
   List<Gutter> _parseGeoJsonFeatures(List<dynamic> features) {
-    final gutters = <Gutter>[];
-    for (final f in features) {
-      final geometry = f['geometry'];
-      if (geometry == null) continue;
+  final gutters = <Gutter>[];
+  for (final f in features) {
+    final geometry = f['geometry'];
+    if (geometry == null) continue;
 
-      // MultiLineStringは全セグメントを結合して1本として扱う
-      final List<dynamic> allCoords;
-      if (geometry['type'] == 'MultiLineString') {
-        allCoords = (geometry['coordinates'] as List)
-            .expand((line) => line as List<dynamic>)
-            .toList();
-      } else if (geometry['type'] == 'LineString') {
-        allCoords = geometry['coordinates'] as List<dynamic>;
-      } else {
-        continue;
-      }
-
-      final points = allCoords
-          .map((c) =>
-              LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble()))
+    final List<dynamic> allCoords;
+    if (geometry['type'] == 'MultiLineString') {
+      allCoords = (geometry['coordinates'] as List)
+          .expand((line) => line as List<dynamic>)
           .toList();
-      if (points.length < 2) continue;
-
-      final props = f['properties'] ?? {};
-      gutters.add(Gutter(
-        id: props['id']?.toString() ?? 'SG-${DateTime.now().millisecondsSinceEpoch}',
-        name: props['name']?.toString() ?? '',
-        shape: props['shape']?.toString() ?? 'open',
-        diameter: props['diameter']?.toString() ?? '300×300',
-        memo: props['memo']?.toString() ?? '',
-        flowReversed: props['flowReversed'] as bool? ?? false,
-        color: props['color'] != null 
-            ? Color(props['color'] as int) 
-            : Colors.blue,
-        strokeWidth: (props['strokeWidth'] as num?)?.toDouble() ?? 7.5,
-        showArrow: props['showArrow'] as bool? ?? false,
-        arrowSize: (props['arrowSize'] as num?)?.toDouble() ?? 12.0,
-        points: points,
-        properties: Map<String, dynamic>.from(props),
-      ));
+    } else if (geometry['type'] == 'LineString') {
+      allCoords = geometry['coordinates'] as List<dynamic>;
+    } else {
+      continue;
     }
-    return gutters;
+
+    final points = allCoords
+        .map((c) => LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble()))
+        .toList();
+    if (points.length < 2) continue;
+
+    final props = f['properties'] ?? {};
+
+    gutters.add(Gutter(
+      id: props['id']?.toString() ?? 'SG-${DateTime.now().millisecondsSinceEpoch}',
+      name: props['name']?.toString() ?? '',
+      shape: props['shape']?.toString() ?? 'open',
+      diameter: props['diameter']?.toString() ?? '300×300',
+      memo: props['memo']?.toString() ?? '',
+      flowReversed: props['flowReversed'] as bool? ?? false,
+      color: props['color'] != null 
+          ? Color(props['color'] as int) 
+          : Colors.blue,
+      strokeWidth: (props['strokeWidth'] as num?)?.toDouble() ?? 7.5,
+      showArrow: props['showArrow'] as bool? ?? false,
+      arrowSize: (props['arrowSize'] as num?)?.toDouble() ?? 12.0,
+      points: points,
+      properties: Map<String, dynamic>.from(props), // これを残す
+    ));
   }
+  return gutters;
+}
 
   /// パース結果をレイヤーとして追加する共通処理
   void _addParsedLayer(List<Gutter> gutters, String name) {
@@ -479,6 +478,7 @@ Future<void> _uploadAllLayers() async {
             'strokeWidth': g.strokeWidth,
             'showArrow': g.showArrow,
             'arrowSize': g.arrowSize,
+            // 既存の properties もマージ（念のため）
             ...g.properties,
           },
         });
@@ -499,22 +499,19 @@ Future<void> _uploadAllLayers() async {
       }),
     );
 
-    // === ここを修正 ===
     if (response.statusCode != 200) {
       String errorMsg = 'HTTP ${response.statusCode}';
       try {
         final errorData = jsonDecode(response.body);
         errorMsg += ': ${errorData.toString()}';
       } catch (_) {
-        errorMsg += ': ${response.body.substring(0, 200)}'; // 長すぎ防止
+        errorMsg += ': ${response.body}';
       }
       throw Exception(errorMsg);
     }
 
     final data = jsonDecode(response.body);
-
-    final shareUrl =
-        '${web.window.location.origin}/?geojson=${Uri.encodeComponent(data['rawUrl'] as String)}';
+    final shareUrl = '${web.window.location.origin}/?geojson=${Uri.encodeComponent(data['rawUrl'] as String)}';
 
     await Clipboard.setData(ClipboardData(text: shareUrl));
 
@@ -527,10 +524,7 @@ Future<void> _uploadAllLayers() async {
         content: SelectableText(shareUrl),
         actions: [
           TextButton(
-            onPressed: () {
-              Clipboard.setData(ClipboardData(text: shareUrl));
-              _showSnackBar('URLをコピーしました');
-            },
+            onPressed: () => Clipboard.setData(ClipboardData(text: shareUrl)),
             child: const Text('コピー'),
           ),
           TextButton(
@@ -541,7 +535,7 @@ Future<void> _uploadAllLayers() async {
       ),
     );
 
-    _showSnackBar('${features.length}本を全レイヤーで共有しました');
+    _showSnackBar('${features.length}本を共有しました');
   } catch (e) {
     debugPrint('Upload Error: $e');
     _showSnackBar('アップロード失敗: $e');
