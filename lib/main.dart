@@ -210,19 +210,11 @@ void initState() {
   });
 }
 
-// 新規メソッド追加
+// 新規メソッド追加（または置き換え）
 Future<void> _loadOnlyFromUrl(String url) async {
   try {
-    // ローカルストレージをクリア
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('layers_data');
-    
-    setState(() {
-      layers.clear();
-      selectedLayerIndex = null;
-    });
-
     _showSnackBar('共有URLからデータを読み込み中...');
+
     final response = await http.get(Uri.parse(url));
     if (response.statusCode != 200) throw Exception('HTTP ${response.statusCode}');
 
@@ -230,15 +222,21 @@ Future<void> _loadOnlyFromUrl(String url) async {
     final gutters = _parseGeoJsonFeatures(
         data['features'] as List<dynamic>? ?? []);
 
-    _addParsedLayer(gutters, '共有データ ${DateTime.now().toIso8601String().substring(0,10)}');
-    await _saveToLocalStorage();   // これを追加
+    // ★★★ 変更点 ★★★
+    // ローカルデータを完全にクリアせず、共有データを「追加」する形に変更
+    if (gutters.isNotEmpty) {
+      _addParsedLayer(gutters, '共有データ ${DateTime.now().toIso8601String().substring(0,10)}');
+      
+      // 共有データを読み込んだ後、保存もしておく（リロード対策）
+      await _saveToLocalStorage();
+    }
+
     _showAllGutters();
-    _showAllGutters();
-    _showSnackBar('${gutters.length}本の側溝を読み込みました（ローカルデータはクリア）');
+    _showSnackBar('${gutters.length}本の側溝を読み込みました');
   } catch (e) {
     _showSnackBar('URL読み込み失敗: $e');
     // 失敗したら通常のローカル読み込みにフォールバック
-    _loadFromLocalStorage();
+    await _loadFromLocalStorage();
   }
 }
 
