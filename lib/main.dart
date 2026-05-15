@@ -293,19 +293,22 @@ List<Gutter> _parseGeoJsonFeatures(List<dynamic> features) {
 
     final props = f['properties'] ?? {};
 
-    // 重要な属性を確実に優先して取得
+    // ★★★ 優先順位を明確に（共有データ対応強化）★★★
+    String shape = props['shape']?.toString() ?? 
+                   props['断面形状']?.toString() ?? 'open';
+    
+    String diameter = props['diameter']?.toString() ?? 
+                      props['口径']?.toString() ?? '300×300';
+    
+    String memo = props['memo']?.toString() ?? 
+                  props['メモ']?.toString() ?? '';
+
     gutters.add(Gutter(
       id: props['id']?.toString() ?? 'SG-${DateTime.now().millisecondsSinceEpoch}',
       name: props['name']?.toString() ?? '',
-      
-      // ★★★ ここを強化 ★★★
-      shape: props['shape']?.toString() ?? 
-             props['断面形状']?.toString() ?? 'open',
-      diameter: props['diameter']?.toString() ?? 
-                props['口径']?.toString() ?? '300×300',
-      memo: props['memo']?.toString() ?? 
-            props['メモ']?.toString() ?? '',
-      
+      shape: shape,
+      diameter: diameter,
+      memo: memo,
       flowReversed: props['flowReversed'] as bool? ?? false,
       color: props['color'] != null 
           ? Color(props['color'] as int) 
@@ -313,9 +316,8 @@ List<Gutter> _parseGeoJsonFeatures(List<dynamic> features) {
       strokeWidth: (props['strokeWidth'] as num?)?.toDouble() ?? 7.5,
       showArrow: props['showArrow'] as bool? ?? false,
       arrowSize: (props['arrowSize'] as num?)?.toDouble() ?? 12.0,
-      
       points: points,
-      properties: Map<String, dynamic>.from(props), // 元の全プロパティも保持
+      properties: Map<String, dynamic>.from(props),
     ));
   }
   return gutters;
