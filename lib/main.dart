@@ -268,10 +268,8 @@ Future<void> _loadOnlyFromUrl(String url) async {
   // ================================================================
   // GeoJSON パース（共通ロジック）
   // ================================================================
-
   /// GeoJSONのfeatures配列からGutterリストを生成する共通処理。
-  /// LineString / MultiLineString のみ対象。2点未満はスキップ。
-  List<Gutter> _parseGeoJsonFeatures(List<dynamic> features) {
+List<Gutter> _parseGeoJsonFeatures(List<dynamic> features) {
   final gutters = <Gutter>[];
   for (final f in features) {
     final geometry = f['geometry'];
@@ -295,12 +293,19 @@ Future<void> _loadOnlyFromUrl(String url) async {
 
     final props = f['properties'] ?? {};
 
+    // 重要な属性を確実に優先して取得
     gutters.add(Gutter(
       id: props['id']?.toString() ?? 'SG-${DateTime.now().millisecondsSinceEpoch}',
       name: props['name']?.toString() ?? '',
-      shape: props['shape']?.toString() ?? 'open',
-      diameter: props['diameter']?.toString() ?? '300×300',
-      memo: props['memo']?.toString() ?? '',
+      
+      // ★★★ ここを強化 ★★★
+      shape: props['shape']?.toString() ?? 
+             props['断面形状']?.toString() ?? 'open',
+      diameter: props['diameter']?.toString() ?? 
+                props['口径']?.toString() ?? '300×300',
+      memo: props['memo']?.toString() ?? 
+            props['メモ']?.toString() ?? '',
+      
       flowReversed: props['flowReversed'] as bool? ?? false,
       color: props['color'] != null 
           ? Color(props['color'] as int) 
@@ -308,8 +313,9 @@ Future<void> _loadOnlyFromUrl(String url) async {
       strokeWidth: (props['strokeWidth'] as num?)?.toDouble() ?? 7.5,
       showArrow: props['showArrow'] as bool? ?? false,
       arrowSize: (props['arrowSize'] as num?)?.toDouble() ?? 12.0,
+      
       points: points,
-      properties: Map<String, dynamic>.from(props), // これを残す
+      properties: Map<String, dynamic>.from(props), // 元の全プロパティも保持
     ));
   }
   return gutters;
