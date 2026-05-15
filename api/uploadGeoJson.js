@@ -1,96 +1,99 @@
+// ================================================================
+// api/uploadGeoJson.js
+// GeoJSON を GitHub へ保存し Raw URL を返す Vercel Serverless Function
+// ================================================================
+
+const GITHUB_OWNER = 'tomi-1090';
+const GITHUB_REPO  = 'side-gutters-map';
+
+/** すべてのレスポンスに付ける CORS ヘッダー（スマホ Safari/Chrome 対策） */
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin' : '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+};
+
 export default async function handler(req, res) {
+  // ── プリフライトリクエスト (OPTIONS) ──────────────────────────
+  if (req.method === 'OPTIONS') {
+    return res.status(204).set(CORS_HEADERS).end();
+  }
+
+  // ── CORS ヘッダーを全レスポンスに付与 ─────────────────────────
+  Object.entries(CORS_HEADERS).forEach(([k, v]) => res.setHeader(k, v));
+
+  // ── メソッドチェック ──────────────────────────────────────────
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  // ── バリデーション ────────────────────────────────────────────
+  const { geojson, shareId: rawShareId } = req.body ?? {};
+  if (!geojson) {
+    return res.status(400).json({ error: 'No geojson provided' });
+  }
+
   try {
-    if (req.method !== 'POST') {
-      return res.status(405).json({ error: 'Method not allowed' });
-    }
+    // ── ファイルパス決定 ──────────────────────────────────────────
+    // shareId は英数字・ハイフン・アンダースコアのみ許可（パストラバーサル対策）
+    const shareId = /^[\w-]+$/.test(rawShareId ?? '')
+      ? rawShareId
+      : Date.now().toString();
 
-    const body = req.body;
+    const filePath = `shared/${shareId}.geojson`;
+    const apiUrl   = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${filePath}`;
 
-    if (!body.geojson) {
-      return res.status(400).json({ error: 'No geojson' });
-    }
+    // ── 既存ファイルの SHA 取得（更新時に必要） ───────────────────
+    const sha = await fetchExistingSha(apiUrl);
 
-    // =========================
-    // GitHub設定
-    // =========================
+    // ── Base64 エンコード ─────────────────────────────────────────
+    const content = Buffer.from(JSON.stringify(geojson, null, 2)).toString('base64');
 
-    const owner = 'tomi-1090';
-    const repo = 'side-gutters-map';
-
-    // ★ 固定shareId
-    const fileId = body.shareId || Date.now().toString();
-
-    const path = `shared/${fileId}.geojson`;
-
-    const apiUrl =
-      `https://api.github.com/repos/${owner}/${repo}/contents/${path}`;
-
-    // =========================
-    // 既存ファイル確認
-    // =========================
-
-    let sha = undefined;
-
-    const checkRes = await fetch(apiUrl, {
-      headers: {
-        Authorization: `token ${process.env.GITHUB_TOKEN}`,
-      },
-    });
-
-    if (checkRes.ok) {
-      const checkData = await checkRes.json();
-      sha = checkData.sha;
-    }
-
-    // =========================
-    // Base64化
-    // =========================
-
-    const contentBase64 = Buffer.from(
-      JSON.stringify(body.geojson, null, 2)
-    ).toString('base64');
-
-    // =========================
-    // GitHubへ保存
-    // =========================
+    // ── GitHub Contents API へ PUT ────────────────────────────────
+    const putBody = {
+      message: `update ${shareId}`,
+      content,
+      ...(sha ? { sha } : {}),       // 新規作成時は sha 不要
+    };
 
     const githubRes = await fetch(apiUrl, {
-      method: 'PUT',
+      method : 'PUT',
       headers: {
-        Authorization: `token ${process.env.GITHUB_TOKEN}`,
+        Authorization : `token ${process.env.GITHUB_TOKEN}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        message: `update ${fileId}`,
-        content: contentBase64,
-
-        // ★ 既存更新に必要
-        sha: sha,
-      }),
+      body: JSON.stringify(putBody),
     });
-
-    const githubData = await githubRes.json();
 
     if (!githubRes.ok) {
-      return res.status(500).json(githubData);
+      const err = await githubRes.json().catch(() => ({}));
+      console.error('[uploadGeoJson] GitHub API error:', err);
+      return res.status(502).json({ error: 'GitHub API error', detail: err });
     }
 
-    // =========================
-    // Raw URL
-    // =========================
+    // ── Raw URL を返す（クエリパラメータなし ＝ スマホでも安全） ──
+    const rawUrl = `https://raw.githubusercontent.com/${GITHUB_OWNER}/${GITHUB_REPO}/main/${filePath}`;
 
-    const rawUrl =
-      `https://raw.githubusercontent.com/${owner}/${repo}/main/${path}`;
+    return res.status(200).json({ success: true, rawUrl, shareId });
 
-    return res.status(200).json({
-      success: true,
-      rawUrl,
-      shareId: fileId,
+  } catch (err) {
+    console.error('[uploadGeoJson] Unexpected error:', err);
+    return res.status(500).json({ error: err.message ?? String(err) });
+  }
+}
+
+// ================================================================
+// ヘルパー: 既存ファイルの SHA を取得（存在しない場合は undefined）
+// ================================================================
+async function fetchExistingSha(apiUrl) {
+  try {
+    const res = await fetch(apiUrl, {
+      headers: { Authorization: `token ${process.env.GITHUB_TOKEN}` },
     });
-
-  } catch (e) {
-    return res.status(500).json({
-      error: e.toString(),
-    });
+    if (!res.ok) return undefined;
+    const data = await res.json();
+    return data.sha;
+  } catch {
+    return undefined;
   }
 }
