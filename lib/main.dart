@@ -190,6 +190,7 @@ class _MapPageState extends State<MapPage> {
   int _newGutterCounter = 1;
 
   String currentTile = 'osm';
+  String? sharedGeoJsonUrl;
 
   // initState内
 @override
@@ -222,14 +223,17 @@ Future<void> _loadOnlyFromUrl(String url) async {
     final gutters = _parseGeoJsonFeatures(
         data['features'] as List<dynamic>? ?? []);
 
-    // ★★★ 変更点 ★★★
-    // ローカルデータを完全にクリアせず、共有データを「追加」する形に変更
-    if (gutters.isNotEmpty) {
-      _addParsedLayer(gutters, '共有データ ${DateTime.now().toIso8601String().substring(0,10)}');
-      
-      // 共有データを読み込んだ後、保存もしておく（リロード対策）
-      await _saveToLocalStorage();
-    }
+    // ★共有元URLを保持
+      sharedGeoJsonUrl = url;
+
+      if (gutters.isNotEmpty) {
+        _addParsedLayer(
+          gutters,
+          '共有データ ${DateTime.now().toIso8601String().substring(0,10)}',
+        );
+
+        await _saveToLocalStorage();
+      }
 
     _showAllGutters();
     _showSnackBar('${gutters.length}本の側溝を読み込みました');
@@ -500,6 +504,11 @@ Future<void> _uploadAllLayers() async {
       _showSnackBar('アップロードするデータがありません');
       return;
     }
+    final shareId =
+    web.window.localStorage.getItem('share_id') ??
+    DateTime.now().millisecondsSinceEpoch.toString();
+
+    web.window.localStorage.setItem('share_id', shareId);
 
     final List<Map<String, dynamic>> features = [];
 
@@ -534,18 +543,22 @@ Future<void> _uploadAllLayers() async {
       }
     }
 
+    final Map<String, dynamic> bodyData = {
+  'shareId': shareId,
+
+  'geojson': {
+    'type': 'FeatureCollection',
+    'features': features,
+    'exported_at': DateTime.now().toIso8601String(),
+    'layers_count': layers.length,
+    'gutters_count': features.length,
+  },
+};
+
     final response = await http.post(
       Uri.parse('/api/uploadGeoJson'),
       headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'geojson': {
-          'type': 'FeatureCollection',
-          'features': features,
-          'exported_at': DateTime.now().toIso8601String(),
-          'layers_count': layers.length,
-          'gutters_count': features.length,
-        },
-      }),
+      body: jsonEncode(bodyData),
     );
 
     if (response.statusCode != 200) {
@@ -560,6 +573,7 @@ Future<void> _uploadAllLayers() async {
     }
 
     final data = jsonDecode(response.body);
+    sharedGeoJsonUrl = data['rawUrl'] as String;
     final shareUrl = '${web.window.location.origin}/?geojson=${Uri.encodeComponent(data['rawUrl'] as String)}';
 
     await Clipboard.setData(ClipboardData(text: shareUrl));

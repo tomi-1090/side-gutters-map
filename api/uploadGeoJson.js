@@ -1,10 +1,5 @@
 export default async function handler(req, res) {
   try {
-    console.log('TOKEN EXISTS:', !!process.env.GITHUB_TOKEN);
-      console.log(
-        'TOKEN START:',
-        process.env.GITHUB_TOKEN?.substring(0, 10)
-      );
     if (req.method !== 'POST') {
       return res.status(405).json({ error: 'Method not allowed' });
     }
@@ -18,23 +13,47 @@ export default async function handler(req, res) {
     // =========================
     // GitHub設定
     // =========================
+
     const owner = 'tomi-1090';
     const repo = 'side-gutters-map';
 
-    // ファイル名
-    const fileId = Date.now();
+    // ★ 固定shareId
+    const fileId = body.shareId || Date.now().toString();
+
     const path = `shared/${fileId}.geojson`;
 
-    // GitHub API URL
     const apiUrl =
       `https://api.github.com/repos/${owner}/${repo}/contents/${path}`;
 
+    // =========================
+    // 既存ファイル確認
+    // =========================
+
+    let sha = undefined;
+
+    const checkRes = await fetch(apiUrl, {
+      headers: {
+        Authorization: `token ${process.env.GITHUB_TOKEN}`,
+      },
+    });
+
+    if (checkRes.ok) {
+      const checkData = await checkRes.json();
+      sha = checkData.sha;
+    }
+
+    // =========================
     // Base64化
+    // =========================
+
     const contentBase64 = Buffer.from(
       JSON.stringify(body.geojson, null, 2)
     ).toString('base64');
 
+    // =========================
     // GitHubへ保存
+    // =========================
+
     const githubRes = await fetch(apiUrl, {
       method: 'PUT',
       headers: {
@@ -42,8 +61,11 @@ export default async function handler(req, res) {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        message: `upload ${fileId}`,
+        message: `update ${fileId}`,
         content: contentBase64,
+
+        // ★ 既存更新に必要
+        sha: sha,
       }),
     });
 
@@ -53,13 +75,17 @@ export default async function handler(req, res) {
       return res.status(500).json(githubData);
     }
 
+    // =========================
     // Raw URL
+    // =========================
+
     const rawUrl =
       `https://raw.githubusercontent.com/${owner}/${repo}/main/${path}`;
 
     return res.status(200).json({
       success: true,
       rawUrl,
+      shareId: fileId,
     });
 
   } catch (e) {
