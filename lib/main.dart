@@ -243,11 +243,16 @@ Future<void> _loadOnlyFromUrl(String url) async {
   // ================================================================
   // ローカルストレージ
   // ================================================================
-
   Future<void> _saveToLocalStorage() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-        'layers_data', jsonEncode(layers.map((l) => l.toJson()).toList()));
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final jsonString = jsonEncode(layers.map((l) => l.toJson()).toList());
+      await prefs.setString('layers_data', jsonString);
+      debugPrint('✅ 保存完了: ${layers.length}レイヤー, ${layers.fold(0, (sum, l) => sum + l.gutters.length)}本');
+    } catch (e) {
+      debugPrint('❌ 保存エラー: $e');
+      _showSnackBar('保存エラー: $e');
+    }
   }
 
   Future<void> _loadFromLocalStorage() async {
@@ -989,16 +994,20 @@ Future<void> _uploadAllLayers() async {
                       ),
                       Expanded(
                         child: ElevatedButton(
-                          onPressed: () {
+                          onPressed: () async {
                             setState(() {
                               g.name = nameCtrl.text;
                               g.shape = shapeCtrl.text.trim();
                               g.diameter = diamCtrl.text.trim();
                               g.memo = memCtrl.text.trim();
                             });
-                            _saveToLocalStorage();
-                            Navigator.pop(ctx);
-                            _showSnackBar('保存しました');
+                            
+                            await _saveToLocalStorage();     // ← await を追加
+                            
+                            if (mounted) {
+                              Navigator.pop(ctx);
+                              _showSnackBar('保存しました');
+                            }
                           },
                           child: const Text('保存'),
                         ),
