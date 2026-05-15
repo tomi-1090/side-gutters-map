@@ -215,8 +215,18 @@ void initState() {
 Future<void> _loadOnlyFromUrl(String url) async {
   try {
     _showSnackBar('共有URLからデータを読み込み中...');
+    // ★ share_id をURLから復元
+    final uri = Uri.parse(url);
+
+    final fileName = uri.pathSegments.last; // 12345.geojson
+    final shareId = fileName.replaceAll('.geojson', '');
+
+    web.window.localStorage.setItem('share_id', shareId);
+
+    debugPrint('share_id復元: $shareId');
 
     final response = await http.get(Uri.parse(url));
+    
     if (response.statusCode != 200) throw Exception('HTTP ${response.statusCode}');
 
     final data = jsonDecode(utf8.decode(response.bodyBytes));
