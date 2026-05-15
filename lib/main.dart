@@ -225,8 +225,9 @@ Future<void> _loadOnlyFromUrl(String url) async {
 
     debugPrint('share_id復元: $shareId');
 
+    debugPrint('読み込みURL: $url');
     final response = await http.get(Uri.parse(url));
-    
+
     if (response.statusCode != 200) throw Exception('HTTP ${response.statusCode}');
 
     final data = jsonDecode(utf8.decode(response.bodyBytes));
@@ -244,6 +245,7 @@ Future<void> _loadOnlyFromUrl(String url) async {
 
         await _saveToLocalStorage();
       }
+      
 
     _showAllGutters();
     _showSnackBar('${gutters.length}本の側溝を読み込みました');
@@ -584,7 +586,16 @@ Future<void> _uploadAllLayers() async {
 
     final data = jsonDecode(response.body);
     sharedGeoJsonUrl = data['rawUrl'] as String;
-    final shareUrl = '${web.window.location.origin}/?geojson=${Uri.encodeComponent(data['rawUrl'] as String)}';
+    final rawUrl = data['rawUrl'] as String;
+
+    // ★ キャッシュ回避
+    final cacheBuster =
+        DateTime.now().millisecondsSinceEpoch.toString();
+
+    final geojsonUrl = '$rawUrl?v=$cacheBuster';
+
+    final shareUrl =
+        '${web.window.location.origin}/?geojson=${Uri.encodeComponent(geojsonUrl)}';
 
     await Clipboard.setData(ClipboardData(text: shareUrl));
 
