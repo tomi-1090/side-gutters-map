@@ -191,18 +191,54 @@ class _MapPageState extends State<MapPage> {
 
   String currentTile = 'osm';
 
-  @override
-  void initState() {
-    super.initState();
-    _loadFromLocalStorage();
+  // initState内
+@override
+void initState() {
+  super.initState();
+  
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    final geojsonUrl = Uri.decodeComponent(
+        Uri.base.queryParameters['geojson'] ?? '');
+    
+    if (geojsonUrl.isNotEmpty) {
+      // URL指定がある場合はローカルデータをクリアしてURLの内容だけを表示
+      _loadOnlyFromUrl(geojsonUrl);
+    } else {
+      _loadFromLocalStorage();
+    }
+  });
+}
 
-    // 起動時にURLパラメータ ?geojson=... があれば自動読み込み
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final url =
-          Uri.decodeComponent(Uri.base.queryParameters['geojson'] ?? '');
-      if (url.isNotEmpty) _loadGeoJSONFromUrl(url);
+// 新規メソッド追加
+Future<void> _loadOnlyFromUrl(String url) async {
+  try {
+    // ローカルストレージをクリア
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('layers_data');
+    
+    setState(() {
+      layers.clear();
+      selectedLayerIndex = null;
     });
+
+    _showSnackBar('共有URLからデータを読み込み中...');
+    final response = await http.get(Uri.parse(url));
+    if (response.statusCode != 200) throw Exception('HTTP ${response.statusCode}');
+
+    final data = jsonDecode(utf8.decode(response.bodyBytes));
+    final gutters = _parseGeoJsonFeatures(
+        data['features'] as List<dynamic>? ?? []);
+
+    _addParsedLayer(gutters, '共有データ ${DateTime.now().toIso8601String().substring(0,10)}');
+    
+    _showAllGutters();
+    _showSnackBar('${gutters.length}本の側溝を読み込みました（ローカルデータはクリア）');
+  } catch (e) {
+    _showSnackBar('URL読み込み失敗: $e');
+    // 失敗したら通常のローカル読み込みにフォールバック
+    _loadFromLocalStorage();
   }
+}
 
   // ================================================================
   // ローカルストレージ
@@ -261,19 +297,19 @@ class _MapPageState extends State<MapPage> {
 
       final props = f['properties'] ?? {};
       gutters.add(Gutter(
-        id: props['id']?.toString() ??
-            props['ID']?.toString() ??
-            'SG-${DateTime.now().millisecondsSinceEpoch}',
-        name: props['name']?.toString() ??
-            props['名称']?.toString() ??
-            props['Name']?.toString() ??
-            '',
-        points: points,
-        color: props['color'] != null
-            ? Color(props['color'] as int)
+        id: props['id']?.toString() ?? 'SG-${DateTime.now().millisecondsSinceEpoch}',
+        name: props['name']?.toString() ?? '',
+        shape: props['shape']?.toString() ?? 'open',
+        diameter: props['diameter']?.toString() ?? '300×300',
+        memo: props['memo']?.toString() ?? '',
+        flowReversed: props['flowReversed'] as bool? ?? false,
+        color: props['color'] != null 
+            ? Color(props['color'] as int) 
             : Colors.blue,
         strokeWidth: (props['strokeWidth'] as num?)?.toDouble() ?? 7.5,
         showArrow: props['showArrow'] as bool? ?? false,
+        arrowSize: (props['arrowSize'] as num?)?.toDouble() ?? 12.0,
+        points: points,
         properties: Map<String, dynamic>.from(props),
       ));
     }
@@ -406,69 +442,111 @@ class _MapPageState extends State<MapPage> {
     }
   }
 
-  // ================================================================
-  // GeoJSON アップロード（Vercel APIへPOST）
-  // ================================================================
+//================================================================
+// GeoJSON アップロード（全レイヤー完全共有）
+// ================================================================
 
-  Future<void> _uploadCurrentLayer() async {
-    try {
-      final layer = _currentLayer;
-      if (layer == null) return;
-
-      final response = await http.post(
-        Uri.parse('/api/uploadGeoJson'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'geojson': {
-            'type': 'FeatureCollection',
-            'features': [
-              for (final g in layer.gutters)
-                {
-                  'type': 'Feature',
-                  'geometry': {
-                    'type': 'LineString',
-                    'coordinates':
-                        g.points.map((p) => [p.longitude, p.latitude]).toList(),
-                  },
-                  'properties': {'id': g.id, 'name': g.name, ...g.properties},
-                },
-            ],
-          },
-        }),
-      );
-
-      final data = jsonDecode(response.body);
-      if (response.statusCode != 200) throw Exception(data.toString());
-
-      final shareUrl =
-          '${web.window.location.origin}/?geojson=${Uri.encodeComponent(data['rawUrl'] as String)}';
-      await Clipboard.setData(ClipboardData(text: shareUrl));
-
-      if (!mounted) return;
-      showDialog(
-        context: context,
-        builder: (_) => AlertDialog(
-          title: const Text('アップロード完了'),
-          content: SelectableText(shareUrl),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: shareUrl));
-                _showSnackBar('URLをコピーしました');
-              },
-              child: const Text('コピー'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('閉じる'),
-            ),
-          ],
-        ),
-      );
-    } catch (e) {
-      _showSnackBar('アップロード失敗: $e');
+Future<void> _uploadAllLayers() async {
+  try {
+    if (layers.isEmpty) {
+      _showSnackBar('アップロードするデータがありません');
+      return;
     }
+
+    final List<Map<String, dynamic>> features = [];
+
+    for (final layer in layers) {
+      for (final g in layer.gutters) {
+        features.add({
+          'type': 'Feature',
+          'geometry': {
+            'type': 'LineString',
+            'coordinates': g.points
+                .map((p) => [p.longitude, p.latitude])
+                .toList(),
+          },
+          'properties': {
+            'layer': layer.name,
+            'layerId': layer.id,
+            'layerVisible': layer.visible,
+            'id': g.id,
+            'name': g.name,
+            'shape': g.shape,
+            'diameter': g.diameter,
+            'memo': g.memo,
+            'flowReversed': g.flowReversed,
+            'color': g.color.toARGB32(),
+            'strokeWidth': g.strokeWidth,
+            'showArrow': g.showArrow,
+            'arrowSize': g.arrowSize,
+            ...g.properties,
+          },
+        });
+      }
+    }
+
+    final response = await http.post(
+      Uri.parse('/api/uploadGeoJson'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'geojson': {
+          'type': 'FeatureCollection',
+          'features': features,
+          'exported_at': DateTime.now().toIso8601String(),
+          'layers_count': layers.length,
+          'gutters_count': features.length,
+        },
+      }),
+    );
+
+    // === ここを修正 ===
+    if (response.statusCode != 200) {
+      String errorMsg = 'HTTP ${response.statusCode}';
+      try {
+        final errorData = jsonDecode(response.body);
+        errorMsg += ': ${errorData.toString()}';
+      } catch (_) {
+        errorMsg += ': ${response.body.substring(0, 200)}'; // 長すぎ防止
+      }
+      throw Exception(errorMsg);
+    }
+
+    final data = jsonDecode(response.body);
+
+    final shareUrl =
+        '${web.window.location.origin}/?geojson=${Uri.encodeComponent(data['rawUrl'] as String)}';
+
+    await Clipboard.setData(ClipboardData(text: shareUrl));
+
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('共有URL生成完了'),
+        content: SelectableText(shareUrl),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: shareUrl));
+              _showSnackBar('URLをコピーしました');
+            },
+            child: const Text('コピー'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('閉じる'),
+          ),
+        ],
+      ),
+    );
+
+    _showSnackBar('${features.length}本を全レイヤーで共有しました');
+  } catch (e) {
+    debugPrint('Upload Error: $e');
+    _showSnackBar('アップロード失敗: $e');
   }
+}
 
   // ================================================================
   // 共有URL生成
@@ -567,7 +645,8 @@ class _MapPageState extends State<MapPage> {
       _showSnackBar('ラインの近くをタップしてください');
       return;
     }
-
+    
+    final projPoint = bestProj;
     final g = layer.gutters[bestIdx];
     final pts = g.points;
     setState(() {
@@ -576,14 +655,14 @@ class _MapPageState extends State<MapPage> {
         ..add(Gutter(
           id: '${g.id}-A',
           name: '${g.name}-A',
-          points: [...pts.sublist(0, bestSeg + 1), bestProj!],
+          points: [...pts.sublist(0, bestSeg + 1), projPoint],
           color: g.color,
           properties: Map.from(g.properties),
         ))
         ..add(Gutter(
           id: '${g.id}-B',
           name: '${g.name}-B',
-          points: [bestProj!, ...pts.sublist(bestSeg + 1)],
+          points: [projPoint, ...pts.sublist(bestSeg + 1)],
           color: g.color,
           properties: Map.from(g.properties),
         ));
@@ -1554,7 +1633,7 @@ class _MapPageState extends State<MapPage> {
         ),
       ),
       _fab(tag: 'share_url', icon: Icons.share, onPressed: _generateShareUrl),
-      _fab(tag: 'upload', icon: Icons.cloud_upload, onPressed: _uploadCurrentLayer),
+      _fab(tag: 'upload', icon: Icons.cloud_upload, onPressed: _uploadAllLayers),
     ];
 
     // FAB間に8pxのスペースを挿入
