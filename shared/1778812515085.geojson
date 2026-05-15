@@ -1,0 +1,42 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [
+            139.8057914272278,
+            36.11300948034085
+          ],
+          [
+            139.80636150645086,
+            36.11201201879146
+          ]
+        ]
+      },
+      "properties": {
+        "layer": "レイヤー 1 - テストデータ.geojson",
+        "layerId": "1778812437382",
+        "layerVisible": true,
+        "id": 1,
+        "name": "",
+        "shape": "円形",
+        "diameter": "300",
+        "memo": "U字",
+        "flowReversed": false,
+        "color": 4283215696,
+        "strokeWidth": 7.5,
+        "showArrow": true,
+        "arrowSize": 12,
+        "断面形状": null,
+        "口径": null,
+        "メモ": null
+      }
+    }
+  ],
+  "exported_at": "2026-05-15T11:35:14.850",
+  "layers_count": 1,
+  "gutters_count": 1
+}
