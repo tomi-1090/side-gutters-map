@@ -577,8 +577,12 @@ Future<void> _uploadAllLayers() async {
   },
 };
 
+    final apiUrl =
+    '${web.window.location.origin}/api/uploadGeoJson';
+
     final response = await http.post(
-      Uri.parse('/api/uploadGeoJson'),
+      Uri.parse(apiUrl),
+
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode(bodyData),
     );
@@ -607,7 +611,13 @@ Future<void> _uploadAllLayers() async {
     final shareUrl =
         '${web.window.location.origin}/?geojson=${Uri.encodeComponent(geojsonUrl)}';
 
-    await Clipboard.setData(ClipboardData(text: shareUrl));
+    try {
+      await Clipboard.setData(
+        ClipboardData(text: shareUrl),
+      );
+    } catch (e) {
+      debugPrint('Clipboard失敗: $e');
+    }
 
     if (!mounted) return;
 
