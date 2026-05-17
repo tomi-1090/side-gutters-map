@@ -449,7 +449,7 @@ class _MapPageState extends State<MapPage> {
       _showSnackBar('エクスポートエラー: $e');
     }
   }
-  
+
   // ================================================================
   // GeoJSON アップロード（全レイヤー共有）
   // ================================================================
@@ -1290,18 +1290,24 @@ class _MapPageState extends State<MapPage> {
     final len  = math.sqrt(vecX * vecX + vecY * vecY);
     if (len < 1e-6) return [to, to, to];
 
-    final ux        = vecX / len;
-    final uy        = vecY / len;
+    // 進行方向の単位ベクトル (ux, uy) と垂直単位ベクトル (vx, vy)
+    final ux = vecX / len;
+    final uy = vecY / len;
+    final vx = -uy;           // 垂直 x 成分（経度方向）
+    final vy =  ux;           // 垂直 y 成分（緯度方向）
+
     final halfWidth = sizeMeters * math.tan(15.0 * math.pi / 180);
-    final bx        = -ux * sizeMeters;
-    final by        = -uy * sizeMeters;
+
+    // 底辺の中心: 先端(to)から進行方向の逆に sizeMeters
+    final bx = -ux * sizeMeters;
+    final by = -uy * sizeMeters;
 
     return [
       to,
-      LatLng(to.latitude  + (by - (-uy) * halfWidth) / mPerDegLat,
-             to.longitude + (bx - (-ux) * halfWidth) / mPerDegLon),  // 修正: vx=-uy, vy=ux
-      LatLng(to.latitude  + (by + (-uy) * halfWidth) / mPerDegLat,
-             to.longitude + (bx + (-ux) * halfWidth) / mPerDegLon),
+      LatLng(to.latitude  + (by - vy * halfWidth) / mPerDegLat,
+             to.longitude + (bx - vx * halfWidth) / mPerDegLon),
+      LatLng(to.latitude  + (by + vy * halfWidth) / mPerDegLat,
+             to.longitude + (bx + vx * halfWidth) / mPerDegLon),
     ];
   }
 
