@@ -1501,16 +1501,16 @@ class _MapPageState extends State<MapPage> {
   // ================================================================
   // ユーティリティ
   // ================================================================
-
   /// ズームレベルに応じて線幅をスケーリングする。
-  /// 基準ズーム17 で g.strokeWidth がそのまま使われ、
+  /// 基準ズーム17 で g.strokeWidth の 2/3 が使われ、
   /// 1段ズームアウトするごとに約29%細くなる（2^0.5 ≒ 1.41 倍ステップ）。
-  /// 矢印が sizeMeters でズーム連動しているのと視覚的に揃えた係数。
+  static const _kStrokeBaseScale = 2.0 / 3.0; // 初期表示の太さ補正（元の2/3）
   double _scaledStrokeWidth(double base) {
-    const baseZoom = 15.0;
+    const baseZoom = 17.0;
     final scale = math.pow(2.0, (_currentZoom - baseZoom) * 0.5).toDouble();
-    return (base * scale).clamp(0.8, base * 6);
+    return (base * _kStrokeBaseScale * scale).clamp(0.8, base * 6);
   }
+ 
 
   void _showSnackBar(String message) {
     if (!mounted) return;
