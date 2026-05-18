@@ -576,7 +576,7 @@ class _MapPageState extends State<MapPage> {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        title  : const Text('共有URL生成完了'),
+        title  : const Text('共有URL生成完了⚠アップロード完了まで5分程度かかります⚠'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
