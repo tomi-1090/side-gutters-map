@@ -1388,26 +1388,35 @@ Polyline _buildHeadMark(Gutter g, GutterLayer layer) {
   final dx = p2.longitude - p1.longitude;
   final dy = p2.latitude - p1.latitude;
 
-  final len = math.sqrt(dx * dx + dy * dy);
+  // 緯度経度 → メートル換算
+  const mPerDegLat = 111320.0;
+  final mPerDegLon =
+      mPerDegLat * math.cos(p1.latitude * math.pi / 180);
 
-  if (len == 0) {
+  final vecX = dx * mPerDegLon;
+  final vecY = dy * mPerDegLat;
+
+  final len = math.sqrt(vecX * vecX + vecY * vecY);
+
+  if (len < 1e-6) {
     return Polyline(points: [p1, p1]);
   }
 
-  // 垂直方向
-  final vx = -dy / len;
-  final vy = dx / len;
+  // 路線に垂直な単位ベクトル
+  final vx = -vecY / len;
+  final vy = vecX / len;
 
-  final size = g.headMarkSize * 0.0000018;
+  // マーク半幅(m)
+  final size = g.headMarkSize;
 
   final a = LatLng(
-    p1.latitude + vy * size,
-    p1.longitude + vx * size,
+    p1.latitude + (vy * size) / mPerDegLat,
+    p1.longitude + (vx * size) / mPerDegLon,
   );
 
   final b = LatLng(
-    p1.latitude - vy * size,
-    p1.longitude - vx * size,
+    p1.latitude - (vy * size) / mPerDegLat,
+    p1.longitude - (vx * size) / mPerDegLon,
   );
 
   return Polyline(
