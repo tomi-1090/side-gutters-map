@@ -8,7 +8,7 @@ import 'package:web/web.dart' as web;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:math' as math;
 import 'package:http/http.dart' as http;
-import 'package:flutter/services.dart';
+import 'package:flutter/services.dart' show NetworkAssetBundle;
 
 void main() => runApp(const MyApp());
 
@@ -340,20 +340,15 @@ class _MapPageState extends State<MapPage> {
     _showSnackBar(isShared ? '共有URLからデータを読み込み中...' : 'GeoJSONを読み込み中...');
 
     try {
-      final response = await http.get(
-        Uri.parse(cleanUrl),
-        headers: {
-          'Cache-Control': 'no-cache, no-store, must-revalidate',
-          'Pragma'       : 'no-cache',
-          'Expires'      : '0',
-        },
-      );
+      final uri = Uri.parse(cleanUrl);
 
-      if (response.statusCode != 200) {
-        throw Exception('HTTP ${response.statusCode}');
-      }
+      final bundle = NetworkAssetBundle(uri);
 
-      final data    = jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+      final dataBytes = await bundle.load(uri.toString());
+
+      final jsonString = utf8.decode(dataBytes.buffer.asUint8List());
+
+      final data = jsonDecode(jsonString) as Map<String, dynamic>;
       final gutters = _parseGeoJsonFeatures(data['features'] as List<dynamic>? ?? []);
 
       if (isShared) {
