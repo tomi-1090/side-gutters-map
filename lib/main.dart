@@ -110,6 +110,8 @@ class Gutter {
   bool showArrow;
   double arrowSize;
   double strokeWidth;
+  bool showHeadMark;
+  double headMarkSize;
 
   Gutter({
     required this.id,
@@ -124,6 +126,8 @@ class Gutter {
     this.showArrow  = false,
     this.arrowSize  = 12.0,
     this.strokeWidth = 7.5,
+    this.showHeadMark = false,
+    this.headMarkSize = 10.0,
   })  : color      = color ?? Colors.blue,
         properties = properties ?? {};
 
@@ -140,6 +144,8 @@ class Gutter {
     'showArrow'   : showArrow,
     'arrowSize'   : arrowSize,
     'strokeWidth' : strokeWidth,
+    'showHeadMark': showHeadMark,
+    'headMarkSize': headMarkSize,
   };
 
   factory Gutter.fromJson(Map<String, dynamic> j) => Gutter(
@@ -157,6 +163,8 @@ class Gutter {
     showArrow   : j['showArrow']   as bool? ?? false,
     arrowSize   : (j['arrowSize']   as num?)?.toDouble() ?? 12.0,
     strokeWidth : (j['strokeWidth'] as num?)?.toDouble() ?? 7.5,
+    showHeadMark: j['showHeadMark'] as bool? ?? false,
+    headMarkSize: (j['headMarkSize'] as num?)?.toDouble() ?? 10.0,
   );
 }
 
@@ -307,6 +315,8 @@ class _MapPageState extends State<MapPage> {
         strokeWidth : (props['strokeWidth'] as num?)?.toDouble() ?? 7.5,
         showArrow   : props['showArrow'] as bool? ?? false,
         arrowSize   : (props['arrowSize'] as num?)?.toDouble() ?? 12.0,
+        showHeadMark : props['showHeadMark'] as bool? ?? false,
+        headMarkSize : (props['headMarkSize'] as num?)?.toDouble() ?? 10.0,
         points      : points,
         properties  : Map<String, dynamic>.from(props),
       ));
@@ -595,6 +605,8 @@ class _MapPageState extends State<MapPage> {
                 'strokeWidth' : g.strokeWidth,
                 'showArrow'   : g.showArrow,
                 'arrowSize'   : g.arrowSize,
+                'showHeadMark' : g.showHeadMark,
+                'headMarkSize' : g.headMarkSize, 
               },
             },
           },
@@ -672,23 +684,64 @@ class _MapPageState extends State<MapPage> {
     final proj = bestProj;
 
     setState(() {
-      layer.gutters
-        ..removeAt(bestIdx)
-        ..add(Gutter(
-          id        : '${g.id}-A',
-          name      : '${g.name}-A',
-          points    : [...pts.sublist(0, bestSeg + 1), proj],
-          color     : g.color,
-          properties: Map.from(g.properties),
-        ))
-        ..add(Gutter(
-          id        : '${g.id}-B',
-          name      : '${g.name}-B',
-          points    : [proj, ...pts.sublist(bestSeg + 1)],
-          color     : g.color,
-          properties: Map.from(g.properties),
-        ));
-    });
+  layer.gutters.removeAt(bestIdx);
+
+  layer.gutters.add(
+    Gutter(
+      id: '${g.id}-A',
+      name: '${g.name}-A',
+
+      shape: g.shape,
+      diameter: g.diameter,
+      memo: g.memo,
+      flowReversed: g.flowReversed,
+
+      color: g.color,
+
+      showArrow: g.showArrow,
+      arrowSize: g.arrowSize,
+      strokeWidth: g.strokeWidth,
+
+      showHeadMark: g.showHeadMark,
+      headMarkSize: g.headMarkSize,
+
+      properties: Map<String, dynamic>.from(g.properties),
+
+      points: [
+        ...pts.sublist(0, bestSeg + 1),
+        proj,
+      ],
+    ),
+  );
+
+  layer.gutters.add(
+    Gutter(
+        id: '${g.id}-B',
+        name: '${g.name}-B',
+
+        shape: g.shape,
+        diameter: g.diameter,
+        memo: g.memo,
+        flowReversed: g.flowReversed,
+
+        color: g.color,
+
+        showArrow: g.showArrow,
+        arrowSize: g.arrowSize,
+        strokeWidth: g.strokeWidth,
+
+        showHeadMark: g.showHeadMark,
+        headMarkSize: g.headMarkSize,
+
+        properties: Map<String, dynamic>.from(g.properties),
+
+        points: [
+          proj,
+          ...pts.sublist(bestSeg + 1),
+        ],
+      ),
+    );
+  });
 
     _saveToLocalStorage();
     _showSnackBar('切断完了 (${bestDist.toStringAsFixed(1)}m)');
@@ -926,6 +979,12 @@ class _MapPageState extends State<MapPage> {
                           _showSnackBar('流向を反転しました');
                         },
                       ),
+                      SwitchListTile(
+                      title: const Text('最上流マークを表示'),
+                      value: g.showHeadMark,
+                      onChanged: (v) => setS(() => g.showHeadMark = v),
+                      contentPadding: EdgeInsets.zero,
+                    ),
                     ],
                   ),
 
@@ -1312,6 +1371,54 @@ class _MapPageState extends State<MapPage> {
   }
 
   // ================================================================
+// 最上流マーク
+// ================================================================
+
+List<Polyline> _createHeadMarkPolylines() => [
+  for (final layer in layers)
+    if (layer.visible)
+      for (final g in layer.gutters)
+        if (g.showHeadMark && g.points.length >= 2)
+          _buildHeadMark(g, layer),
+];
+
+Polyline _buildHeadMark(Gutter g, GutterLayer layer) {
+  final p1 = g.points.first;
+  final p2 = g.points[1];
+
+  final dx = p2.longitude - p1.longitude;
+  final dy = p2.latitude - p1.latitude;
+
+  final len = math.sqrt(dx * dx + dy * dy);
+
+  if (len == 0) {
+    return Polyline(points: [p1, p1]);
+  }
+
+  // 垂直方向
+  final vx = -dy / len;
+  final vy = dx / len;
+
+  final size = g.headMarkSize * 0.0000018;
+
+  final a = LatLng(
+    p1.latitude + vy * size,
+    p1.longitude + vx * size,
+  );
+
+  final b = LatLng(
+    p1.latitude - vy * size,
+    p1.longitude - vx * size,
+  );
+
+  return Polyline(
+    points: [a, b],
+    color: _getGutterColor(g, layer),
+    strokeWidth: g.strokeWidth * 0.7,
+  );
+}
+
+  // ================================================================
   // ユーティリティ
   // ================================================================
 
@@ -1406,28 +1513,51 @@ class _MapPageState extends State<MapPage> {
       onTap        : _addPoint,
     ),
     children: [
-      TileLayer(
-        urlTemplate        : _kTileUrls[currentTile] ?? _kTileUrls['osm']!,
-        userAgentPackageName: 'com.example.sideGutter_map',
-      ),
-      ...layers.where((l) => l.visible).map((layer) => PolylineLayer(
+    TileLayer(
+      urlTemplate: _kTileUrls[currentTile] ?? _kTileUrls['osm']!,
+      userAgentPackageName: 'com.example.sideGutter_map',
+    ),
+
+    // 側溝ライン
+    ...layers.where((l) => l.visible).map(
+      (layer) => PolylineLayer(
         polylines: layer.gutters.map((g) => Polyline(
-          points          : g.points,
-          color           : _getGutterColor(g, layer),
-          strokeWidth     : g.strokeWidth,
+          points: g.points,
+          color: _getGutterColor(g, layer),
+          strokeWidth: g.strokeWidth,
           borderStrokeWidth: 2.5,
-          borderColor     : Colors.white,
+          borderColor: Colors.white,
         )).toList(),
-      )),
-      if (isAddingNew && newPoints.isNotEmpty)
-        PolylineLayer(
-          polylines: [
-            Polyline(points: newPoints, color: Colors.orange, strokeWidth: 7.5),
-          ],
-        ),
-      ..._createFlowArrowPolygons()
-          .map((p) => PolygonLayer(polygons: [p], polygonCulling: false)),
-    ],
+      ),
+    ),
+
+    // 新規追加中ライン
+    if (isAddingNew && newPoints.isNotEmpty)
+      PolylineLayer(
+        polylines: [
+          Polyline(
+            points: newPoints,
+            color: Colors.orange,
+            strokeWidth: 7.5,
+          ),
+        ],
+      ),
+
+    // 流向矢印
+    ..._createFlowArrowPolygons().map(
+      (p) => PolygonLayer(
+        polygons: [p],
+        polygonCulling: false,
+      ),
+    ),
+
+    // 最上流マーク
+    ..._createHeadMarkPolylines().map(
+      (p) => PolylineLayer(
+        polylines: [p],
+      ),
+    ),
+  ],
   );
 
   Widget _buildDrawer() => Drawer(
