@@ -39,7 +39,7 @@ const _kColorPalette = [
   Colors.purple, Colors.teal, Colors.brown, Colors.grey,
 ];
 
-const _kShapeOptions = ['open', 'box', 'circle', 'other'];
+const _kShapeOptions = [  '開渠',  'BOX',  '円形',  'その他',];
 const _kShapeLabels  = {
   'open': '開渠', 'box': 'BOX', 'circle': '円形', 'other': 'その他',
 };
@@ -1077,34 +1077,42 @@ class _MapPageState extends State<MapPage> {
   }
 
   Widget _buildAutocomplete({
-    required String label,
-    required String hint,
-    required String initial,
-    required List<String> options,
-    required String Function(String) display,
-    required bool Function(String option, String input) filter,
-    required TextEditingController ctrl,
-  }) {
-    return Autocomplete<String>(
-      initialValue        : TextEditingValue(text: initial),
-      optionsBuilder      : (v) =>
-          v.text.isEmpty ? options : options.where((o) => filter(o, v.text)),
-      displayStringForOption: display,
-      onSelected          : (s) => ctrl.text = s,
-      fieldViewBuilder    : (context, fieldCtrl, focusNode, _) {
-        ctrl.text = fieldCtrl.text;
-        return TextFormField(
-          controller: fieldCtrl,
-          focusNode : focusNode,
-          decoration: InputDecoration(
-            labelText: label,
-            border   : const OutlineInputBorder(),
-            hintText : hint,
-          ),
-        );
-      },
-    );
-  }
+  required String label,
+  required String hint,
+  required String initial,
+  required List<String> options,
+  required String Function(String) display,
+  required bool Function(String option, String input) filter,
+  required TextEditingController ctrl,
+}) {
+  return DropdownMenu<String>(
+    controller: ctrl,
+
+    label: Text(label),
+
+    hintText: hint,
+
+    width: double.infinity,
+
+    enableSearch: true,
+    enableFilter: true,
+
+    initialSelection: initial.isEmpty ? null : initial,
+
+    dropdownMenuEntries: options.map((o) {
+      return DropdownMenuEntry<String>(
+        value: o,
+        label: display(o),
+      );
+    }).toList(),
+
+    onSelected: (value) {
+      if (value != null) {
+        ctrl.text = value;
+      }
+    },
+  );
+}
 
   // ================================================================
   // カメラ・位置情報
