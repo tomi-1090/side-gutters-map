@@ -209,6 +209,9 @@ class _MapPageState extends State<MapPage> {
   String currentTile       = 'osm';
   String? _sharedGeoJsonUrl;
 
+  // ズームレベルに応じた線幅スケーリング用
+  double _currentZoom = 17.0;
+
   // ================================================================
   // 初期化
   // ================================================================
@@ -296,13 +299,13 @@ class _MapPageState extends State<MapPage> {
       if (points.length < 2) continue;
 
       final props    = f['properties'] as Map<String, dynamic>? ?? {};
-      final shape    = props['shape']?.toString()    ?? props['断面形状']?.toString() ?? '---';
-      final diameter = props['diameter']?.toString() ?? props['口径']?.toString()     ?? '---';
+      final shape    = props['shape']?.toString()    ?? props['断面形状']?.toString() ?? 'open';
+      final diameter = props['diameter']?.toString() ?? props['口径']?.toString()     ?? '300×300';
       final memo     = props['memo']?.toString()     ?? props['メモ']?.toString()     ?? '';
 
       result.add(Gutter(
-        id          : props['id']?.toString()   ?? '---',
-        name        : props['name']?.toString() ?? '---',
+        id          : props['id']?.toString()   ?? 'SG-1',
+        name        : props['name']?.toString() ?? '',
         shape       : shape,
         diameter    : diameter,
         memo        : memo,
@@ -573,7 +576,7 @@ class _MapPageState extends State<MapPage> {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        title  : const Text('共有URL生成完了※反映には5分程度かかります'),
+        title  : const Text('共有URL生成完了'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -875,7 +878,7 @@ class _MapPageState extends State<MapPage> {
       return;
     }
 
-    final ctrl = TextEditingController(text: '00$_newGutterCounter');
+    final ctrl = TextEditingController(text: '側溝 SG-00$_newGutterCounter');
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -894,7 +897,7 @@ class _MapPageState extends State<MapPage> {
               _saveStateForUndo();
               setState(() {
                 layer.gutters.add(Gutter(
-                  id    : '00$_newGutterCounter',
+                  id    : 'SG-00$_newGutterCounter',
                   name  : ctrl.text,
                   points: List.from(newPoints),
                 ));
@@ -1491,13 +1494,23 @@ class _MapPageState extends State<MapPage> {
                p1.longitude - (vx * size) / mPerDegLon),
       ],
       color      : _getGutterColor(g, layer).withValues(alpha: 0.9),
-      strokeWidth: math.max(1.4, g.strokeWidth * 0.22),
+      strokeWidth: math.max(0.8, _scaledStrokeWidth(g.strokeWidth * 0.22)),
     );
   }
 
   // ================================================================
   // ユーティリティ
   // ================================================================
+
+  /// ズームレベルに応じて線幅をスケーリングする。
+  /// 基準ズーム17 で g.strokeWidth がそのまま使われ、
+  /// 1段ズームアウトするごとに約29%細くなる（2^0.5 ≒ 1.41 倍ステップ）。
+  /// 矢印が sizeMeters でズーム連動しているのと視覚的に揃えた係数。
+  double _scaledStrokeWidth(double base) {
+    const baseZoom = 17.0;
+    final scale = math.pow(2.0, (_currentZoom - baseZoom) * 0.5).toDouble();
+    return (base * scale).clamp(0.8, base * 6);
+  }
 
   void _showSnackBar(String message) {
     if (!mounted) return;
@@ -1654,6 +1667,12 @@ class _MapPageState extends State<MapPage> {
       initialCenter: const LatLng(36.555, 139.882),
       initialZoom  : 17.0,
       onTap        : _addPoint,
+      onMapEvent   : (event) {
+        final zoom = event.camera.zoom;
+        if ((zoom - _currentZoom).abs() > 0.01) {
+          setState(() => _currentZoom = zoom);
+        }
+      },
     ),
     children: [
       TileLayer(
@@ -1663,18 +1682,19 @@ class _MapPageState extends State<MapPage> {
       ...layers.where((l) => l.visible).map(
         (layer) => PolylineLayer(
           polylines: layer.gutters.map((g) => Polyline(
-            points          : g.points,
-            color           : _getGutterColor(g, layer),
-            strokeWidth     : g.strokeWidth,
-            borderStrokeWidth: 2.5,
-            borderColor     : Colors.white,
+            points           : g.points,
+            color            : _getGutterColor(g, layer),
+            strokeWidth      : _scaledStrokeWidth(g.strokeWidth),
+            borderStrokeWidth: _scaledStrokeWidth(2.5),
+            borderColor      : Colors.white,
           )).toList(),
         ),
       ),
       if (isAddingNew && newPoints.isNotEmpty)
         PolylineLayer(
           polylines: [
-            Polyline(points: newPoints, color: Colors.orange, strokeWidth: 7.5),
+            Polyline(points: newPoints, color: Colors.orange,
+                strokeWidth: _scaledStrokeWidth(7.5)),
           ],
         ),
       ..._createFlowArrowPolygons().map(
