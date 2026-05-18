@@ -307,7 +307,7 @@ class _MapPageState extends State<MapPage> {
         diameter    : diameter,
         memo        : memo,
         flowReversed: props['flowReversed'] as bool? ?? false,
-        color       : props['color'] != null ? Color(props['color'] as int) : Colors.blue,
+        color       : props['color'] != null ? Color((props['color'] as num).toInt()) : Colors.blue,
         strokeWidth : (props['strokeWidth'] as num?)?.toDouble() ?? 7.5,
         showArrow   : props['showArrow'] as bool? ?? false,
         arrowSize   : (props['arrowSize'] as num?)?.toDouble() ?? 12.0,
@@ -359,16 +359,64 @@ class _MapPageState extends State<MapPage> {
 
       final jsonString = utf8.decode(response.bodyBytes);
 
-      final data = jsonDecode(jsonString) as Map<String, dynamic>;
-      final gutters = _parseGeoJsonFeatures(data['features'] as List<dynamic>? ?? []);
+      final data     = jsonDecode(jsonString) as Map<String, dynamic>;
+      final features = data['features'] as List<dynamic>? ?? [];
 
       if (isShared) {
         try {
           web.window.localStorage.setItem(_kShareIdKey, shareId);
         } catch (_) {}
         _sharedGeoJsonUrl = cleanUrl;
+
+        // _buildFeatureList(withLayerMeta: true) で保存した場合、
+        // 各 Feature の properties に 'layer' / 'layerId' が含まれる。
+        // それでグループ化してレイヤーごとに復元する。
+        final hasLayerMeta = features.isNotEmpty &&
+            ((features.first['properties'] as Map<String, dynamic>?)
+                    ?.containsKey('layer') ==
+                true);
+
+        if (hasLayerMeta) {
+          // layerId 順を維持しながらグループ化（LinkedHashMap で挿入順保持）
+          final layerMap = <String, List<dynamic>>{};
+          final layerNames = <String, String>{};
+          for (final f in features) {
+            final props   = f['properties'] as Map<String, dynamic>? ?? {};
+            final layerId = props['layerId']?.toString() ??
+                props['layer']?.toString() ??
+                'default';
+            final layerName = props['layer']?.toString() ?? '共有データ';
+            layerMap.putIfAbsent(layerId, () => []).add(f);
+            layerNames[layerId] = layerName;
+          }
+
+          if (layerMap.isEmpty) {
+            _showSnackBar('有効なラインが見つかりませんでした');
+            return;
+          }
+
+          int total = 0;
+          setState(() {
+            for (final entry in layerMap.entries) {
+              final gutters = _parseGeoJsonFeatures(entry.value);
+              if (gutters.isEmpty) continue;
+              total += gutters.length;
+              layers.add(GutterLayer(
+                id     : entry.key,
+                name   : layerNames[entry.key] ?? '共有データ',
+                gutters: gutters,
+              ));
+            }
+          });
+          if (layers.isNotEmpty) _showAllGutters();
+          await _saveToLocalStorage();
+          _showSnackBar('$total本の側溝を${layerMap.length}レイヤーで読み込みました');
+          return;
+        }
       }
 
+      // layerMeta なし（または非共有URL）→ 従来どおり1レイヤーとして追加
+      final gutters = _parseGeoJsonFeatures(features);
       if (gutters.isEmpty) {
         _showSnackBar('有効なラインが見つかりませんでした');
         return;
@@ -1657,19 +1705,6 @@ class _MapPageState extends State<MapPage> {
             onTap  : () { setState(() => _fabExpanded = false); _loadGeoJSON(); },
           ),
           _menuRow(
-            label  : 'URL読込',
-            icon   : Icons.link,
-            onTap  : () {
-              setState(() => _fabExpanded = false);
-              _showUrlInputDialog(
-                title      : 'GeoJSON URLから読み込み',
-                hint       : 'https://raw.githubusercontent.com/...',
-                actionLabel: '読み込み',
-                onSubmit   : (url) => _loadFromUrl(url),
-              );
-            },
-          ),
-          _menuRow(
             label  : 'エクスポート',
             icon   : Icons.download,
             onTap  : () { setState(() => _fabExpanded = false); _exportGeoJSON(); },
@@ -1678,16 +1713,6 @@ class _MapPageState extends State<MapPage> {
             label  : 'アップロード共有',
             icon   : Icons.cloud_upload,
             onTap  : () { setState(() => _fabExpanded = false); _uploadAllLayers(); },
-          ),
-          _menuRow(
-            label  : 'URL共有生成',
-            icon   : Icons.share,
-            onTap  : () { setState(() => _fabExpanded = false); _generateShareUrl(); },
-          ),
-          _menuRow(
-            label  : '全体表示',
-            icon   : Icons.fullscreen,
-            onTap  : () { setState(() => _fabExpanded = false); _showAllGutters(); },
           ),
           const SizedBox(height: 4),
           const Divider(height: 1),
@@ -1703,6 +1728,17 @@ class _MapPageState extends State<MapPage> {
           color  : Colors.white,
           iconColor: Colors.blue,
           mini   : true,
+        ),
+        const SizedBox(height: 6),
+
+        // 全体表示
+        _roundFab(
+          icon     : Icons.fullscreen,
+          tooltip  : '全体表示',
+          onTap    : _showAllGutters,
+          color    : Colors.white,
+          iconColor: Colors.blueGrey,
+          mini     : true,
         ),
         const SizedBox(height: 6),
 
