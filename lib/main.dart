@@ -190,6 +190,12 @@ class _MapPageState extends State<MapPage> {
   bool         isAddingNew      = false;
   List<LatLng> newPoints        = [];
   bool         isCutting        = false;
+  bool isDeleting = false;
+
+  // Undo / Redo
+  final List<String> _undoStack = [];
+  final List<String> _redoStack = [];
+
   int          _newGutterCounter = 1;
 
   String  currentTile      = 'osm';
@@ -628,6 +634,60 @@ class _MapPageState extends State<MapPage> {
     isAddingNew = false;
   });
 
+  void _toggleDeleteMode() => setState(() {
+  isDeleting = !isDeleting;
+  isAddingNew = false;
+  isCutting = false;
+  });
+  
+  void _saveStateForUndo() {
+    _undoStack.add(jsonEncode(layers.map((l) => l.toJson()).toList()));
+
+    // Undo履歴が増えたらRedoは無効
+    _redoStack.clear();
+
+    // 履歴上限
+    if (_undoStack.length > 30) {
+      _undoStack.removeAt(0);
+    }
+  }
+
+  void _undo() {
+  if (_undoStack.isEmpty) return;
+
+  _redoStack.add(
+    jsonEncode(layers.map((l) => l.toJson()).toList()),
+  );
+
+  final prev = _undoStack.removeLast();
+
+  setState(() {
+    layers = (jsonDecode(prev) as List<dynamic>)
+        .map((j) => GutterLayer.fromJson(j))
+        .toList();
+  });
+
+  _saveToLocalStorage();
+}
+
+void _redo() {
+  if (_redoStack.isEmpty) return;
+
+  _undoStack.add(
+    jsonEncode(layers.map((l) => l.toJson()).toList()),
+  );
+
+  final next = _redoStack.removeLast();
+
+  setState(() {
+    layers = (jsonDecode(next) as List<dynamic>)
+        .map((j) => GutterLayer.fromJson(j))
+        .toList();
+  });
+
+  _saveToLocalStorage();
+}
+
   // ================================================================
   // マップタップ処理
   // ================================================================
@@ -639,13 +699,29 @@ class _MapPageState extends State<MapPage> {
       return;
     }
 
+    if (isDeleting) {
+      final nearest = _findNearestGutterInLayer(point, layer);
+
+      if (nearest != null) {
+        setState(() {
+          layer.gutters.remove(nearest);
+        });
+
+        _saveToLocalStorage();
+
+        _showSnackBar('側溝を削除しました');
+      }
+
+      return;
+    }
+
     if (isAddingNew) {
       setState(() => newPoints.add(point));
     } else if (isCutting) {
       _cutLineAtPoint(point, layer);
     } else {
       final nearest = _findNearestGutterInLayer(point, layer);
-      if (nearest != null) _showGutterInfo(nearest);
+      if (nearest != null) _showEditForm(nearest);
     }
   }
 
@@ -684,7 +760,8 @@ class _MapPageState extends State<MapPage> {
     final proj = bestProj;
 
     setState(() {
-  layer.gutters.removeAt(bestIdx);
+      _saveStateForUndo();
+      layer.gutters.removeAt(bestIdx);
 
   layer.gutters.add(
     Gutter(
@@ -807,6 +884,7 @@ class _MapPageState extends State<MapPage> {
           ),
           TextButton(
             onPressed: () {
+              _saveStateForUndo();
               setState(() {
                 layer.gutters.add(Gutter(
                   id    : 'SG-00$_newGutterCounter',
@@ -831,65 +909,6 @@ class _MapPageState extends State<MapPage> {
   // ================================================================
   // Gutter 情報表示・編集
   // ================================================================
-
-  void _showGutterInfo(Gutter g) {
-    showModalBottomSheet(
-      context          : context,
-      isScrollControlled: true,
-      useRootNavigator : true,
-      shape            : const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => Padding(
-        padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-        child: SingleChildScrollView(
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              mainAxisSize    : MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  g.name.isNotEmpty ? g.name : '側溝情報',
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                const Divider(height: 24),
-                Text('形状: ${_kShapeLabels[g.shape] ?? g.shape}'),
-                const SizedBox(height: 8),
-                Text('口径: ${g.diameter}'),
-                const SizedBox(height: 8),
-                Text('メモ: ${g.memo.isEmpty ? "なし" : g.memo}'),
-                const SizedBox(height: 8),
-                Text('流向矢印: ${g.showArrow ? "表示" : "非表示"}'),
-                const SizedBox(height: 24),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextButton(
-                        onPressed: () => Navigator.pop(ctx),
-                        child    : const Text('閉じる'),
-                      ),
-                    ),
-                    Expanded(
-                      child: ElevatedButton(
-                        onPressed: () {
-                          Navigator.pop(ctx);
-                          _showEditForm(g);
-                        },
-                        child: const Text('編集'),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
   void _showEditForm(Gutter g) {
     if (_currentLayer == null) return;
 
@@ -973,6 +992,7 @@ class _MapPageState extends State<MapPage> {
                       icon: const Icon(Icons.swap_horiz),
                       label: const Text('流向を反転'),
                       onPressed: () async {
+                        _saveStateForUndo();
                         setState(() => g.points = g.points.reversed.toList());
                         await _saveToLocalStorage();
                           if (!mounted) return;
@@ -1683,14 +1703,27 @@ Polyline _buildHeadMark(Gutter g, GutterLayer layer) {
 
   Widget _buildFab() {
     final fabs = <Widget>[
+      _fab(
+        tag: 'undo',
+        icon: Icons.undo,
+        onPressed: _undo,
+        mini: true,
+      ),
+
+      _fab(
+        tag: 'redo',
+        icon: Icons.redo,
+        onPressed: _redo,
+        mini: true,
+      ),
       _fab(tag: 'all',  icon: Icons.fullscreen,  onPressed: _showAllGutters, mini: true),
       if (isAddingNew)
         _fab(tag: 'save', icon: Icons.save, onPressed: _saveNewGutter),
       _fab(
-        tag      : 'cut',
-        icon     : Icons.content_cut,
-        onPressed: _toggleCutMode,
-        color    : isCutting ? Colors.purple : null,
+        tag      : 'delete',
+        icon     : Icons.delete,
+        onPressed: _toggleDeleteMode,
+        color    : isDeleting ? Colors.red : null,
       ),
       _fab(
         tag      : 'add',
