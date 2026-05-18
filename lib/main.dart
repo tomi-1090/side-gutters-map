@@ -304,7 +304,7 @@ class _MapPageState extends State<MapPage> {
       final memo     = props['memo']?.toString()     ?? props['メモ']?.toString()     ?? '';
 
       result.add(Gutter(
-        id          : props['id']?.toString()   ?? 'SG-1',
+        id          : props['id']?.toString()   ?? '01',
         name        : props['name']?.toString() ?? '',
         shape       : shape,
         diameter    : diameter,
@@ -878,7 +878,7 @@ class _MapPageState extends State<MapPage> {
       return;
     }
 
-    final ctrl = TextEditingController(text: '側溝 SG-00$_newGutterCounter');
+    final ctrl = TextEditingController(text: '01$_newGutterCounter');
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -897,7 +897,7 @@ class _MapPageState extends State<MapPage> {
               _saveStateForUndo();
               setState(() {
                 layer.gutters.add(Gutter(
-                  id    : 'SG-00$_newGutterCounter',
+                  id    : '01$_newGutterCounter',
                   name  : ctrl.text,
                   points: List.from(newPoints),
                 ));
@@ -1507,7 +1507,7 @@ class _MapPageState extends State<MapPage> {
   /// 1段ズームアウトするごとに約29%細くなる（2^0.5 ≒ 1.41 倍ステップ）。
   /// 矢印が sizeMeters でズーム連動しているのと視覚的に揃えた係数。
   double _scaledStrokeWidth(double base) {
-    const baseZoom = 17.0;
+    const baseZoom = 15.0;
     final scale = math.pow(2.0, (_currentZoom - baseZoom) * 0.5).toDouble();
     return (base * scale).clamp(0.8, base * 6);
   }
