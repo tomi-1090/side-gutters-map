@@ -125,8 +125,8 @@ class Gutter {
   Gutter({
     required this.id,
     this.name         = '',
-    this.shape        = 'open',
-    this.diameter     = '300×300',
+    this.shape        = '---',
+    this.diameter     = '---',
     this.memo         = '',
     this.flowReversed = false,
     required this.points,
@@ -160,8 +160,8 @@ class Gutter {
   factory Gutter.fromJson(Map<String, dynamic> j) => Gutter(
     id          : j['id']?.toString()       ?? '',
     name        : j['name']?.toString()     ?? '',
-    shape       : j['shape']?.toString()    ?? 'open',
-    diameter    : j['diameter']?.toString() ?? '300×300',
+    shape       : j['shape']?.toString()    ?? '---',
+    diameter    : j['diameter']?.toString() ?? '---',
     memo        : j['memo']?.toString()     ?? '',
     flowReversed: j['flowReversed'] as bool? ?? false,
     color       : Color(j['color'] as int?  ?? Colors.blue.toARGB32()),
@@ -299,12 +299,12 @@ class _MapPageState extends State<MapPage> {
       if (points.length < 2) continue;
 
       final props    = f['properties'] as Map<String, dynamic>? ?? {};
-      final shape    = props['shape']?.toString()    ?? props['断面形状']?.toString() ?? 'open';
-      final diameter = props['diameter']?.toString() ?? props['口径']?.toString()     ?? '300×300';
+      final shape    = props['shape']?.toString()    ?? props['断面形状']?.toString() ?? '---';
+      final diameter = props['diameter']?.toString() ?? props['口径']?.toString()     ?? '---';
       final memo     = props['memo']?.toString()     ?? props['メモ']?.toString()     ?? '';
 
       result.add(Gutter(
-        id          : props['id']?.toString()   ?? '01',
+        id          : props['id']?.toString()   ?? 'SG-1',
         name        : props['name']?.toString() ?? '',
         shape       : shape,
         diameter    : diameter,
@@ -878,7 +878,7 @@ class _MapPageState extends State<MapPage> {
       return;
     }
 
-    final ctrl = TextEditingController(text: '01$_newGutterCounter');
+    final ctrl = TextEditingController(text: '側溝 SG-00$_newGutterCounter');
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -897,7 +897,7 @@ class _MapPageState extends State<MapPage> {
               _saveStateForUndo();
               setState(() {
                 layer.gutters.add(Gutter(
-                  id    : '01$_newGutterCounter',
+                  id    : 'SG-00$_newGutterCounter',
                   name  : ctrl.text,
                   points: List.from(newPoints),
                 ));
@@ -1501,6 +1501,7 @@ class _MapPageState extends State<MapPage> {
   // ================================================================
   // ユーティリティ
   // ================================================================
+
   /// ズームレベルに応じて線幅をスケーリングする。
   /// 基準ズーム17 で g.strokeWidth の 2/3 が使われ、
   /// 1段ズームアウトするごとに約29%細くなる（2^0.5 ≒ 1.41 倍ステップ）。
@@ -1510,7 +1511,6 @@ class _MapPageState extends State<MapPage> {
     final scale = math.pow(2.0, (_currentZoom - baseZoom) * 0.5).toDouble();
     return (base * _kStrokeBaseScale * scale).clamp(0.8, base * 6);
   }
- 
 
   void _showSnackBar(String message) {
     if (!mounted) return;
@@ -1585,6 +1585,22 @@ class _MapPageState extends State<MapPage> {
                   : '側溝踏査マップ',
       style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
     ),
+    // 通常モード時：選択中レイヤーをサブタイトルに表示
+    bottom: (!isAddingNew && !isCutting && !isDeleting)
+        ? PreferredSize(
+            preferredSize: const Size.fromHeight(20),
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 5),
+              child: Text(
+                _currentLayer != null
+                    ? '編集中レイヤー：${_currentLayer!.name}'
+                    : 'レイヤー未選択',
+                style: const TextStyle(
+                    color: Colors.white70, fontSize: 12),
+              ),
+            ),
+          )
+        : null,
     backgroundColor: isAddingNew
         ? Colors.orange
         : isCutting
@@ -1658,6 +1674,12 @@ class _MapPageState extends State<MapPage> {
         bottom: 24,
         child : _buildFabColumn(),
       ),
+      // 左下：選択中レイヤーバッジ（常時表示）
+      Positioned(
+        left  : 12,
+        bottom: 24,
+        child : _buildLayerBadge(),
+      ),
     ],
   );
 
@@ -1705,6 +1727,60 @@ class _MapPageState extends State<MapPage> {
       ),
     ],
   );
+
+  // ================================================================
+  // 選択中レイヤーバッジ（左下常時表示）
+  // ================================================================
+
+  Widget _buildLayerBadge() {
+    final layer = _currentLayer;
+    // レイヤーなし・未選択
+    final label  = layer != null ? layer.name : 'レイヤー未選択';
+    final isNone = layer == null;
+
+    return GestureDetector(
+      // タップでドロワーを開く
+      onTap: () => _scaffoldKey.currentState?.openEndDrawer(),
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 200),
+        padding    : const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        decoration : BoxDecoration(
+          color       : isNone
+              ? Colors.black45
+              : Colors.blue.shade700.withValues(alpha: 0.9),
+          borderRadius: BorderRadius.circular(20),
+          boxShadow   : const [
+            BoxShadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 2)),
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children    : [
+            Icon(
+              isNone ? Icons.layers_clear : Icons.layers,
+              color: Colors.white,
+              size : 15,
+            ),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                label,
+                maxLines  : 1,
+                overflow  : TextOverflow.ellipsis,
+                style     : const TextStyle(
+                  color     : Colors.white,
+                  fontSize  : 12,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            const SizedBox(width: 4),
+            const Icon(Icons.arrow_drop_up, color: Colors.white70, size: 16),
+          ],
+        ),
+      ),
+    );
+  }
 
   // ================================================================
   // FAB：スマホ向けに2列グリッド＋展開メニュー方式
