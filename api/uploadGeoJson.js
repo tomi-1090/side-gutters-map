@@ -72,7 +72,7 @@ export default async function handler(req, res) {
     }
 
     // ── Raw URL を返す（クエリパラメータなし ＝ スマホでも安全） ──
-    const rawUrl = `https://raw.githubusercontent.com/${GITHUB_OWNER}/${GITHUB_REPO}/main/${filePath}`;
+    const rawUrl =`https://raw.githubusercontent.com/${GITHUB_OWNER}/${GITHUB_REPO}/main/${filePath}`;
 
     return res.status(200).json({ success: true, rawUrl, shareId });
 
