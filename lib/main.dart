@@ -8,6 +8,7 @@ import 'package:file_picker/file_picker.dart';
 
 import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:ui' as ui;   // ← flutter_map の Path<LatLng> と区別するためエイリアス追加
 
 import 'package:web/web.dart' as web;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -64,6 +65,72 @@ const _kShareIdKey = 'share_id';
 const _kUndoLimit = 20;
 
 // ================================================================
+// 方向矢印スタンプ（Pointデータ）
+// ================================================================
+
+class ArrowStamp {
+  String  id;
+  LatLng  position;
+  double  angleDeg;   // 北を0として時計回りの角度（度）
+  Color   color;
+  double  size;       // メートル換算の表示サイズ
+  String  memo;
+
+  ArrowStamp({
+    required this.id,
+    required this.position,
+    this.angleDeg = 0.0,
+    Color?  color,
+    this.size = 15.0,
+    this.memo = '',
+  }) : color = color ?? Colors.red;
+
+  Map<String, dynamic> toJson() => {
+    'id'      : id,
+    'lat'     : position.latitude,
+    'lng'     : position.longitude,
+    'angleDeg': angleDeg,
+    'color'   : color.toARGB32(),
+    'size'    : size,
+    'memo'    : memo,
+  };
+
+  factory ArrowStamp.fromJson(Map<String, dynamic> j) => ArrowStamp(
+    id      : j['id']?.toString() ?? '',
+    position: LatLng(
+      (j['lat'] as num).toDouble(),
+      (j['lng'] as num).toDouble(),
+    ),
+    angleDeg: (j['angleDeg'] as num?)?.toDouble() ?? 0.0,
+    color   : Color(j['color'] as int? ?? Colors.red.toARGB32()),
+    size    : (j['size']     as num?)?.toDouble() ?? 15.0,
+    memo    : j['memo']?.toString() ?? '',
+  );
+
+  /// GeoJSON Feature（Point）として出力
+  Map<String, dynamic> toGeoJsonFeature({String layerName = '', String layerId = ''}) => {
+    'type'    : 'Feature',
+    'geometry': {
+      'type'       : 'Point',
+      'coordinates': [
+        double.parse(position.longitude.toStringAsFixed(6)),
+        double.parse(position.latitude.toStringAsFixed(6)),
+      ],
+    },
+    'properties': {
+      'id'       : id,
+      'type'     : 'arrow_stamp',
+      'angleDeg' : angleDeg,
+      'color'    : color.toARGB32(),
+      'size'     : size,
+      'memo'     : memo,
+      if (layerName.isNotEmpty) 'layer'  : layerName,
+      if (layerId.isNotEmpty)   'layerId': layerId,
+    },
+  };
+}
+
+// ================================================================
 // データモデル
 // ================================================================
 
@@ -72,6 +139,7 @@ class GutterLayer {
   String name;
   bool visible;
   List<Gutter> gutters;
+  List<ArrowStamp> stamps;
   String? categoryKey;
   Map<String, Color> categoryColors;
 
@@ -80,15 +148,18 @@ class GutterLayer {
     required this.name,
     this.visible = true,
     required this.gutters,
+    List<ArrowStamp>? stamps,
     this.categoryKey,
     Map<String, Color>? categoryColors,
-  }) : categoryColors = categoryColors ?? {};
+  }) : stamps = stamps ?? [],
+       categoryColors = categoryColors ?? {};
 
   Map<String, dynamic> toJson() => {
     'id'            : id,
     'name'          : name,
     'visible'       : visible,
     'gutters'       : gutters.map((g) => g.toJson()).toList(),
+    'stamps'        : stamps.map((s) => s.toJson()).toList(),
     'categoryKey'   : categoryKey,
     'categoryColors': categoryColors.map((k, v) => MapEntry(k, v.toARGB32())),
   };
@@ -99,6 +170,9 @@ class GutterLayer {
     visible : j['visible'] as bool? ?? true,
     gutters : (j['gutters'] as List<dynamic>? ?? [])
         .map((g) => Gutter.fromJson(g as Map<String, dynamic>))
+        .toList(),
+    stamps  : (j['stamps'] as List<dynamic>? ?? [])
+        .map((s) => ArrowStamp.fromJson(s as Map<String, dynamic>))
         .toList(),
     categoryKey   : j['categoryKey']?.toString(),
     categoryColors: (j['categoryColors'] as Map<String, dynamic>? ?? {})
@@ -200,6 +274,8 @@ class _MapPageState extends State<MapPage> {
   List<LatLng> newPoints    = [];
   bool         isCutting    = false;
   bool         isDeleting   = false;
+  bool         isStamping   = false;   // ← 矢印スタンプ配置モード
+  int          _stampCounter = 1;
 
   // Undo / Redo（差分ではなくスナップショット。上限を絞ってメモリ節約）
   final List<String> _undoStack = [];
@@ -307,6 +383,13 @@ class _MapPageState extends State<MapPage> {
       final diameter = props['diameter']?.toString() ?? props['口径']?.toString()     ?? '---';
       final memo     = props['memo']?.toString()     ?? props['メモ']?.toString()     ?? '';
 
+      // propertiesに shape/diameter/memo を必ず統一キーで書き込む
+      // （外部GeoJSONが別キー名を使っていてもカテゴリ色分けで拾えるように）
+      final mergedProps = Map<String, dynamic>.from(props);
+      mergedProps['shape']    = shape;
+      mergedProps['diameter'] = diameter;
+      mergedProps['memo']     = memo;
+
       result.add(Gutter(
         id          : props['id']?.toString()   ?? 'SG-1',
         name        : props['name']?.toString() ?? '',
@@ -321,7 +404,7 @@ class _MapPageState extends State<MapPage> {
         showHeadMark: props['showHeadMark'] as bool? ?? false,
         headMarkSize: (props['headMarkSize'] as num?)?.toDouble() ?? 10.0,
         points      : points,
-        properties  : Map<String, dynamic>.from(props),
+        properties  : mergedProps,
       ));
     }
     return result;
@@ -637,7 +720,7 @@ class _MapPageState extends State<MapPage> {
   // ================================================================
 
   List<Map<String, dynamic>> _buildFeatureList({required bool withLayerMeta}) {
-    return [
+    final lineFeatures = [
       for (final layer in layers)
         for (final g in layer.gutters)
           {
@@ -672,6 +755,19 @@ class _MapPageState extends State<MapPage> {
             },
           },
     ];
+
+    // 矢印スタンプ（Pointデータ）を追加
+    final stampFeatures = [
+      for (final layer in layers)
+        if (layer.visible || withLayerMeta)
+          for (final s in layer.stamps)
+            s.toGeoJsonFeature(
+              layerName: withLayerMeta ? layer.name : '',
+              layerId  : withLayerMeta ? layer.id   : '',
+            ),
+    ];
+
+    return [...lineFeatures, ...stampFeatures];
   }
 
   // ================================================================
@@ -682,6 +778,7 @@ class _MapPageState extends State<MapPage> {
     isAddingNew = !isAddingNew;
     isCutting   = false;
     isDeleting  = false;
+    isStamping  = false;
     newPoints.clear();
   });
 
@@ -689,12 +786,22 @@ class _MapPageState extends State<MapPage> {
     isCutting   = !isCutting;
     isAddingNew = false;
     isDeleting  = false;
+    isStamping  = false;
   });
 
   void _toggleDeleteMode() => setState(() {
     isDeleting  = !isDeleting;
     isAddingNew = false;
     isCutting   = false;
+    isStamping  = false;
+  });
+
+  void _toggleStampMode() => setState(() {
+    isStamping  = !isStamping;
+    isAddingNew = false;
+    isCutting   = false;
+    isDeleting  = false;
+    newPoints.clear();
   });
 
   // ================================================================
@@ -739,6 +846,11 @@ class _MapPageState extends State<MapPage> {
     final layer = _currentLayer;
     if (layer == null) {
       _showSnackBar('レイヤーがありません。先にGeoJSONを読み込んでください。');
+      return;
+    }
+
+    if (isStamping) {
+      _placeArrowStamp(point, layer);
       return;
     }
 
@@ -972,6 +1084,109 @@ class _MapPageState extends State<MapPage> {
             child: const Text('保存'),
           ),
         ],
+      ),
+    );
+  }
+
+  // ================================================================
+  // 矢印スタンプ配置
+  // ================================================================
+
+  void _placeArrowStamp(LatLng point, GutterLayer layer) {
+    double tempAngle = 0.0;
+    Color  tempColor = Colors.red;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setS) {
+          return AlertDialog(
+            title  : const Text('矢印スタンプを配置'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('向き（北=0°、時計回り）', style: TextStyle(fontSize: 13)),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Slider(
+                        value    : tempAngle,
+                        min      : 0,
+                        max      : 359,
+                        divisions: 71, // 5°刻み
+                        label    : '${tempAngle.toStringAsFixed(0)}°',
+                        onChanged: (v) => setS(() => tempAngle = v),
+                      ),
+                    ),
+                    SizedBox(
+                      width: 50,
+                      child: Text('${tempAngle.toStringAsFixed(0)}°',
+                          textAlign: TextAlign.center),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                // コンパス風プレビュー
+                SizedBox(
+                  width : 80,
+                  height: 80,
+                  child : CustomPaint(
+                    painter: _ArrowPreviewPainter(
+                      angleDeg: tempAngle,
+                      color   : tempColor,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Text('色', style: TextStyle(fontSize: 13)),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 6,
+                  children: [
+                    Colors.red, Colors.blue, Colors.green,
+                    Colors.orange, Colors.purple, Colors.black,
+                  ].map((c) => GestureDetector(
+                    onTap: () => setS(() => tempColor = c),
+                    child: Container(
+                      width : 36, height: 36,
+                      decoration: BoxDecoration(
+                        color : c,
+                        shape : BoxShape.circle,
+                        border: Border.all(
+                          color: tempColor == c ? Colors.black : Colors.transparent,
+                          width: 3,
+                        ),
+                      ),
+                    ),
+                  )).toList(),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child    : const Text('キャンセル'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  _saveStateForUndo();
+                  setState(() {
+                    layer.stamps.add(ArrowStamp(
+                      id      : 'AS-${_stampCounter++}',
+                      position: point,
+                      angleDeg: tempAngle,
+                      color   : tempColor,
+                    ));
+                  });
+                  _saveToLocalStorage();
+                  Navigator.pop(ctx);
+                  _showSnackBar('矢印スタンプを配置しました');
+                },
+                child: const Text('配置'),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -1329,10 +1544,34 @@ class _MapPageState extends State<MapPage> {
   // カテゴリ色分け
   // ================================================================
 
+  /// 断面（shape）の入力有無でデフォルト色を返すヘルパー
+  /// shape が '---' / 空 → 未入力 → グレー
+  /// shape が入力済み   → 種別ごとの固定色
+  static Color _defaultShapeColor(Gutter g) {
+    final s = g.shape.trim();
+    if (s.isEmpty || s == '---') return Colors.grey.shade400; // 断面未入力
+    switch (s) {
+      case '開渠' : return Colors.blue;
+      case 'BOX'  : return Colors.orange;
+      case '円形' : return Colors.green;
+      default     : return Colors.purple;
+    }
+  }
+
   Color _getGutterColor(Gutter g, GutterLayer layer) {
     if (layer.categoryKey != null && layer.categoryColors.isNotEmpty) {
-      final value = g.properties[layer.categoryKey!]?.toString() ?? '未分類';
-      return layer.categoryColors[value] ?? Colors.grey;
+      // propertiesから取得（categoryKeyが'shape'/'diameter'等の場合も対応）
+      final raw   = g.properties[layer.categoryKey!];
+      final value = raw?.toString().trim() ?? '';
+      final key   = value.isEmpty ? '未分類' : value;
+      return layer.categoryColors[key] ??
+             layer.categoryColors['未分類'] ??
+             Colors.grey;
+    }
+    // カテゴリ設定なし → g.color が既定(Colors.blue)のままなら
+    // 断面入力の有無で自動色分けする（外部GeoJSON読込後のデフォルト表示改善）
+    if (g.color.toARGB32() == Colors.blue.toARGB32()) {
+      return _defaultShapeColor(g);
     }
     return g.color;
   }
@@ -1351,14 +1590,37 @@ class _MapPageState extends State<MapPage> {
   List<String> _getUniqueValues(GutterLayer layer, String? key) {
     if (key == null) return [];
     return ({
-      for (final g in layer.gutters) g.properties[key]?.toString() ?? '未分類',
+      for (final g in layer.gutters)
+        // '---' や空文字は「未分類」に統一
+        () {
+          final v = g.properties[key]?.toString().trim() ?? '';
+          return (v.isEmpty || v == '---') ? '未分類' : v;
+        }(),
     }.toList()..sort());
   }
 
   Map<String, Color> _generateCategoryColors(GutterLayer layer, String key) {
-    final values  = _getUniqueValues(layer, key);
+    final values = _getUniqueValues(layer, key);
+    // 'shape' キーの場合は断面種別ごとの固定色を使う
+    if (key == 'shape' || key == '断面形状') {
+      return {
+        for (final v in values)
+          v: _shapeNameToColor(v),
+      };
+    }
     final palette = [...Colors.primaries, Colors.brown, Colors.grey, Colors.pink, Colors.cyan];
     return {for (int i = 0; i < values.length; i++) values[i]: palette[i % palette.length]};
+  }
+
+  /// shape値 → 色の固定マッピング
+  static Color _shapeNameToColor(String shape) {
+    switch (shape) {
+      case '開渠'  : return Colors.blue;
+      case 'BOX'   : return Colors.orange;
+      case '円形'  : return Colors.green;
+      case '未分類': return Colors.grey.shade400;
+      default      : return Colors.purple;
+    }
   }
 
   void _showCategoryStylingDialog(int layerIndex) {
@@ -1446,9 +1708,15 @@ class _MapPageState extends State<MapPage> {
               ),
               FilledButton(
                 onPressed: () {
+                  // '---' や空キーを '未分類' に正規化してから保存
+                  final normalized = <String, Color>{};
+                  tempColors.forEach((k, v) {
+                    final nk = (k.trim().isEmpty || k == '---') ? '未分類' : k;
+                    normalized[nk] = v;
+                  });
                   setState(() {
                     layer.categoryKey    = selectedKey;
-                    layer.categoryColors = tempColors;
+                    layer.categoryColors = normalized;
                   });
                   _saveToLocalStorage();
                   Navigator.pop(context);
@@ -1642,11 +1910,13 @@ class _MapPageState extends State<MapPage> {
               ? '切断モード'
               : isDeleting
                   ? '削除モード'
-                  : '側溝踏査マップ',
+                  : isStamping
+                      ? '矢印スタンプモード'
+                      : '側溝踏査マップ',
       style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
     ),
     // 通常モード時：選択中レイヤーをサブタイトルに表示
-    bottom: (!isAddingNew && !isCutting && !isDeleting)
+    bottom: (!isAddingNew && !isCutting && !isDeleting && !isStamping)
         ? PreferredSize(
             preferredSize: const Size.fromHeight(20),
             child: Padding(
@@ -1667,7 +1937,9 @@ class _MapPageState extends State<MapPage> {
             ? Colors.purple
             : isDeleting
                 ? Colors.red
-                : Colors.blue,
+                : isStamping
+                    ? Colors.teal
+                    : Colors.blue,
     foregroundColor: Colors.white,
     actions: [
       // Undo / Redo
@@ -1704,7 +1976,7 @@ class _MapPageState extends State<MapPage> {
     children: [
       _buildMap(),
       // モード中の操作ガイド（画面上部に薄く表示）
-      if (isAddingNew || isCutting || isDeleting)
+      if (isAddingNew || isCutting || isDeleting || isStamping)
         Positioned(
           top  : 0,
           left : 0,
@@ -1714,7 +1986,9 @@ class _MapPageState extends State<MapPage> {
                     ? Colors.orange
                     : isCutting
                         ? Colors.purple
-                        : Colors.red)
+                        : isStamping
+                            ? Colors.teal
+                            : Colors.red)
                 .withValues(alpha: 0.85),
             padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
             child: Text(
@@ -1722,7 +1996,9 @@ class _MapPageState extends State<MapPage> {
                   ? '地図をタップして点を追加 → ✔で保存'
                   : isCutting
                       ? 'ラインをタップして切断'
-                      : '削除したいラインをタップ',
+                      : isStamping
+                          ? '矢印スタンプを配置したい場所をタップ'
+                          : '削除したいラインをタップ',
               textAlign: TextAlign.center,
               style: const TextStyle(color: Colors.white, fontSize: 13),
             ),
@@ -1760,6 +2036,11 @@ class _MapPageState extends State<MapPage> {
       TileLayer(
         urlTemplate        : _kTileUrls[currentTile] ?? _kTileUrls['osm']!,
         userAgentPackageName: 'com.example.sideGutter_map',
+        // 航空写真（GSI seamlessphoto）はネイティブズーム上限が18。
+        // maxNativeZoom を指定しておくと、それ以上ズームしても
+        // ズーム18のタイルを拡大表示するため「白紙」にならない。
+        maxNativeZoom: currentTile == 'gsi_photo' ? 18 : 19,
+        maxZoom      : 22,
       ),
       ...layers.where((l) => l.visible).map(
         (layer) => PolylineLayer(
@@ -1784,6 +2065,23 @@ class _MapPageState extends State<MapPage> {
       ),
       ..._createHeadMarkPolylines().map(
         (p) => PolylineLayer(polylines: [p]),
+      ),
+      // 矢印スタンプ描画
+      MarkerLayer(
+        markers: [
+          for (final layer in layers)
+            if (layer.visible)
+              for (final stamp in layer.stamps)
+                Marker(
+                  point : stamp.position,
+                  width : 40,
+                  height: 40,
+                  child : _ArrowStampWidget(
+                    stamp  : stamp,
+                    onTap  : () => _showStampEditDialog(stamp, layer),
+                  ),
+                ),
+        ],
       ),
     ],
   );
@@ -1920,6 +2218,17 @@ class _MapPageState extends State<MapPage> {
         ),
         const SizedBox(height: 6),
 
+        // 矢印スタンプモード
+        _roundFab(
+          icon     : Icons.navigation,
+          tooltip  : '矢印スタンプ',
+          onTap    : _toggleStampMode,
+          color    : isStamping ? Colors.teal : Colors.white,
+          iconColor: isStamping ? Colors.white : Colors.teal,
+          mini     : true,
+        ),
+        const SizedBox(height: 6),
+
         // 追加モード中は「保存」ボタンも表示
         if (isAddingNew) ...[
           _roundFab(
@@ -2006,6 +2315,115 @@ class _MapPageState extends State<MapPage> {
           ],
         ),
       );
+
+  // ================================================================
+  // 矢印スタンプ編集
+  // ================================================================
+
+  void _showStampEditDialog(ArrowStamp stamp, GutterLayer layer) {
+    double tempAngle = stamp.angleDeg;
+    Color  tempColor = stamp.color;
+    final memoCtrl   = TextEditingController(text: stamp.memo);
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setS) => AlertDialog(
+          title  : Text('スタンプ編集 - ${stamp.id}'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('向き（北=0°、時計回り）', style: TextStyle(fontSize: 13)),
+              Row(
+                children: [
+                  Expanded(
+                    child: Slider(
+                      value    : tempAngle,
+                      min      : 0,
+                      max      : 359,
+                      divisions: 71,
+                      label    : '${tempAngle.toStringAsFixed(0)}°',
+                      onChanged: (v) => setS(() => tempAngle = v),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 50,
+                    child: Text('${tempAngle.toStringAsFixed(0)}°',
+                        textAlign: TextAlign.center),
+                  ),
+                ],
+              ),
+              SizedBox(
+                width: 80, height: 80,
+                child: CustomPaint(
+                  painter: _ArrowPreviewPainter(angleDeg: tempAngle, color: tempColor),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 6,
+                children: [
+                  Colors.red, Colors.blue, Colors.green,
+                  Colors.orange, Colors.purple, Colors.black,
+                ].map((c) => GestureDetector(
+                  onTap: () => setS(() => tempColor = c),
+                  child: Container(
+                    width: 36, height: 36,
+                    decoration: BoxDecoration(
+                      color : c, shape: BoxShape.circle,
+                      border: Border.all(
+                        color: tempColor == c ? Colors.black : Colors.transparent,
+                        width: 3,
+                      ),
+                    ),
+                  ),
+                )).toList(),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: memoCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'メモ', border: OutlineInputBorder(), isDense: true,
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                // 削除
+                _saveStateForUndo();
+                setState(() => layer.stamps.remove(stamp));
+                _saveToLocalStorage();
+                Navigator.pop(ctx);
+                _showSnackBar('スタンプを削除しました');
+              },
+              style: TextButton.styleFrom(foregroundColor: Colors.red),
+              child: const Text('削除'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child    : const Text('キャンセル'),
+            ),
+            FilledButton(
+              onPressed: () {
+                _saveStateForUndo();
+                setState(() {
+                  stamp.angleDeg = tempAngle;
+                  stamp.color    = tempColor;
+                  stamp.memo     = memoCtrl.text.trim();
+                });
+                _saveToLocalStorage();
+                Navigator.pop(ctx);
+                _showSnackBar('スタンプを更新しました');
+              },
+              child: const Text('保存'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   // ================================================================
   // ドロワー（レイヤー管理）
@@ -2137,4 +2555,121 @@ class _MapPageState extends State<MapPage> {
       ],
     ),
   );
+}
+// ================================================================
+// 矢印スタンプ ウィジェット（地図上に表示）
+// ================================================================
+
+class _ArrowStampWidget extends StatelessWidget {
+  final ArrowStamp stamp;
+  final VoidCallback onTap;
+
+  const _ArrowStampWidget({required this.stamp, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Transform.rotate(
+        angle: stamp.angleDeg * math.pi / 180,
+        child: CustomPaint(
+          size   : const Size(40, 40),
+          painter: _ArrowStampPainter(color: stamp.color),
+        ),
+      ),
+    );
+  }
+}
+
+// ================================================================
+// 矢印スタンプ描画（地図用・塗りつぶし矢印）
+// ================================================================
+
+class _ArrowStampPainter extends CustomPainter {
+  final Color color;
+  const _ArrowStampPainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final cx = size.width  / 2;
+    final cy = size.height / 2;
+    final r  = size.width  / 2 - 2;
+
+    // 円背景
+    canvas.drawCircle(
+      Offset(cx, cy),
+      r,
+      Paint()..color = Colors.white.withValues(alpha: 0.85),
+    );
+    canvas.drawCircle(
+      Offset(cx, cy),
+      r,
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2,
+    );
+
+    // 矢印（上向き ＝ 北）
+    final path = ui.Path();
+    path.moveTo(cx,             cy - r * 0.7);  // 先端（上）
+    path.lineTo(cx + r * 0.45,  cy + r * 0.35); // 右下
+    path.lineTo(cx,             cy + r * 0.05);  // 中央凹み
+    path.lineTo(cx - r * 0.45,  cy + r * 0.35); // 左下
+    path.close();
+
+    canvas.drawPath(
+      path,
+      Paint()..color = color,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_ArrowStampPainter old) => old.color != color;
+}
+
+// ================================================================
+// 矢印プレビュー（ダイアログ内のプレビュー表示用）
+// ================================================================
+
+class _ArrowPreviewPainter extends CustomPainter {
+  final double angleDeg;
+  final Color  color;
+  const _ArrowPreviewPainter({required this.angleDeg, required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final cx = size.width  / 2;
+    final cy = size.height / 2;
+    final r  = size.width  / 2 - 4;
+
+    // 外枠
+    canvas.drawCircle(
+      Offset(cx, cy),
+      r,
+      Paint()
+        ..color = Colors.grey.shade300
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5,
+    );
+
+    // 回転して矢印を描画
+    canvas.save();
+    canvas.translate(cx, cy);
+    canvas.rotate(angleDeg * math.pi / 180);
+
+    final path = ui.Path();
+    path.moveTo(0,           -r * 0.7);
+    path.lineTo(r * 0.45,    r * 0.35);
+    path.lineTo(0,            r * 0.05);
+    path.lineTo(-r * 0.45,   r * 0.35);
+    path.close();
+
+    canvas.drawPath(path, Paint()..color = color);
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(_ArrowPreviewPainter old) =>
+      old.angleDeg != angleDeg || old.color != color;
 }
