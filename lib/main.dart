@@ -342,20 +342,19 @@ class _MapPageState extends State<MapPage> {
     _showSnackBar(isShared ? '共有URLからデータを読み込み中...' : 'GeoJSONを読み込み中...');
 
     try {
-      // NetworkAssetBundle は dart:io の Platform._version を参照するため
-      // Web（スマホ・シークレットモード含む）では動作しない。
-      // http パッケージを使用してキャッシュバスター付きで取得する。
-      final cacheBustedUrl = '$cleanUrl?t=${DateTime.now().millisecondsSinceEpoch}';
-      final response = await http.get(
-        Uri.parse(cacheBustedUrl),
-        headers: {
-          'Cache-Control': 'no-cache, no-store',
-          'Pragma'       : 'no-cache',
-        },
-      );
+      // ブラウザから raw.githubusercontent.com へ直接 fetch すると CORS でブロックされる。
+      // Vercel の /api/fetchGeoJson プロキシ経由でサーバーサイド取得する。
+      // shareId を URL の末尾パスから抽出する（拡張子は除去）。
+      final shareId = Uri.parse(cleanUrl).pathSegments.last
+          .replaceAll('.geojson', '');
+
+      final proxyUrl =
+          '${web.window.location.origin}/api/fetchGeoJson?shareId=${Uri.encodeComponent(shareId)}';
+
+      final response = await http.get(Uri.parse(proxyUrl));
 
       if (response.statusCode != 200) {
-        throw Exception('HTTP ${response.statusCode}');
+        throw Exception('HTTP ${response.statusCode}: ${response.body}');
       }
 
       final jsonString = utf8.decode(response.bodyBytes);
@@ -364,7 +363,6 @@ class _MapPageState extends State<MapPage> {
       final gutters = _parseGeoJsonFeatures(data['features'] as List<dynamic>? ?? []);
 
       if (isShared) {
-        final shareId = Uri.parse(cleanUrl).pathSegments.last.replaceAll('.geojson', '');
         try {
           web.window.localStorage.setItem(_kShareIdKey, shareId);
         } catch (_) {}
