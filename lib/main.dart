@@ -296,13 +296,13 @@ class _MapPageState extends State<MapPage> {
       if (points.length < 2) continue;
 
       final props    = f['properties'] as Map<String, dynamic>? ?? {};
-      final shape    = props['shape']?.toString()    ?? props['断面形状']?.toString() ?? 'open';
-      final diameter = props['diameter']?.toString() ?? props['口径']?.toString()     ?? '300×300';
+      final shape    = props['shape']?.toString()    ?? props['断面形状']?.toString() ?? '---';
+      final diameter = props['diameter']?.toString() ?? props['口径']?.toString()     ?? '---';
       final memo     = props['memo']?.toString()     ?? props['メモ']?.toString()     ?? '';
 
       result.add(Gutter(
-        id          : props['id']?.toString()   ?? 'SG-1',
-        name        : props['name']?.toString() ?? '',
+        id          : props['id']?.toString()   ?? '---',
+        name        : props['name']?.toString() ?? '---',
         shape       : shape,
         diameter    : diameter,
         memo        : memo,
@@ -573,7 +573,7 @@ class _MapPageState extends State<MapPage> {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        title  : const Text('共有URL生成完了'),
+        title  : const Text('共有URL生成完了※反映には5分程度かかります'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -875,7 +875,7 @@ class _MapPageState extends State<MapPage> {
       return;
     }
 
-    final ctrl = TextEditingController(text: '側溝 SG-00$_newGutterCounter');
+    final ctrl = TextEditingController(text: '00$_newGutterCounter');
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -894,7 +894,7 @@ class _MapPageState extends State<MapPage> {
               _saveStateForUndo();
               setState(() {
                 layer.gutters.add(Gutter(
-                  id    : 'SG-00$_newGutterCounter',
+                  id    : '00$_newGutterCounter',
                   name  : ctrl.text,
                   points: List.from(newPoints),
                 ));
