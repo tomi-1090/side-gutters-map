@@ -975,7 +975,8 @@ class _MapPageState extends State<MapPage> {
                       onPressed: () async {
                         setState(() => g.points = g.points.reversed.toList());
                         await _saveToLocalStorage();
-                        _showSnackBar('流向を反転しました');
+                          if (!mounted) return;
+                          _showSnackBar('流向を反転しました');
                       },
                     ),
                   ),
@@ -1056,10 +1057,10 @@ class _MapPageState extends State<MapPage> {
                               g.memo     = memCtrl.text.trim();
                             });
                             await _saveToLocalStorage();
-                            if (mounted) {
+                            if (!ctx.mounted) return;
                               Navigator.pop(ctx);
-                              _showSnackBar('保存しました');
-                            }
+                               if (!mounted) return;
+                                 _showSnackBar('保存しました');
                           },
                           child: const Text('保存'),
                         ),
@@ -1407,7 +1408,7 @@ Polyline _buildHeadMark(Gutter g, GutterLayer layer) {
   final vy = vecX / len;
 
   // マーク半幅(m)
-  final size = g.headMarkSize;
+  final size = g.headMarkSize * 0.35;
 
   final a = LatLng(
     p1.latitude + (vy * size) / mPerDegLat,
@@ -1420,10 +1421,10 @@ Polyline _buildHeadMark(Gutter g, GutterLayer layer) {
   );
 
   return Polyline(
-    points: [a, b],
-    color: _getGutterColor(g, layer),
-    strokeWidth: g.strokeWidth * 0.7,
-  );
+  points: [a, b],
+  color: _getGutterColor(g, layer).withValues(alpha: 0.9),
+  strokeWidth: math.max(1.4, g.strokeWidth * 0.22),
+);
 }
 
   // ================================================================
