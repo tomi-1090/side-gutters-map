@@ -339,17 +339,26 @@ class _MapPageState extends State<MapPage> {
   Future<void> _loadFromUrl(String rawUrl, {bool isShared = false}) async {
     final cleanUrl = rawUrl.contains('?') ? rawUrl.split('?').first : rawUrl;
 
-    // キャッシュバスターをURLではなくヘッダーで対応（スマホSafari/Chrome対応）
     _showSnackBar(isShared ? '共有URLからデータを読み込み中...' : 'GeoJSONを読み込み中...');
 
     try {
-      final uri = Uri.parse(cleanUrl);
+      // NetworkAssetBundle は dart:io の Platform._version を参照するため
+      // Web（スマホ・シークレットモード含む）では動作しない。
+      // http パッケージを使用してキャッシュバスター付きで取得する。
+      final cacheBustedUrl = '$cleanUrl?t=${DateTime.now().millisecondsSinceEpoch}';
+      final response = await http.get(
+        Uri.parse(cacheBustedUrl),
+        headers: {
+          'Cache-Control': 'no-cache, no-store',
+          'Pragma'       : 'no-cache',
+        },
+      );
 
-      final bundle = NetworkAssetBundle(uri);
+      if (response.statusCode != 200) {
+        throw Exception('HTTP ${response.statusCode}');
+      }
 
-      final dataBytes = await bundle.load(uri.toString());
-
-      final jsonString = utf8.decode(dataBytes.buffer.asUint8List());
+      final jsonString = utf8.decode(response.bodyBytes);
 
       final data = jsonDecode(jsonString) as Map<String, dynamic>;
       final gutters = _parseGeoJsonFeatures(data['features'] as List<dynamic>? ?? []);
