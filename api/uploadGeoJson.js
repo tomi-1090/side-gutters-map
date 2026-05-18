@@ -44,11 +44,11 @@ export default async function handler(req, res) {
 
   try {
     // ── shareId の決定（パストラバーサル対策）────────────────────
-    const shareId = /^[\w-]+$/.test(rawShareId ?? '')
-      ? rawShareId
+    const shareId = /^[\w-]+$/.test((rawShareId ?? '').trim())
+      ? rawShareId.trim()
       : Date.now().toString();
 
-    const filePath = `shared/${shareId}.geojson`;
+    const filePath = `shared/${encodeURIComponent(shareId)}.geojson`;
     const apiUrl   = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${filePath}`;
 
     // ── 既存ファイルの SHA 取得 ───────────────────────────────────
