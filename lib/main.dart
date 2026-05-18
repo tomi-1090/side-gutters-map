@@ -212,6 +212,10 @@ class _MapPageState extends State<MapPage> {
   // ズームレベルに応じた線幅スケーリング用
   double _currentZoom = 17.0;
 
+  // 端点スナップ ON/OFF
+  bool _snapEnabled = true;
+  static const _kSnapRadiusM = 15.0; // スナップ判定距離（メートル）
+
   // ================================================================
   // 初期化
   // ================================================================
@@ -750,7 +754,13 @@ class _MapPageState extends State<MapPage> {
     }
 
     if (isAddingNew) {
-      setState(() => newPoints.add(point));
+      final snapped = _trySnap(point);
+      if (snapped != null) {
+        setState(() => newPoints.add(snapped));
+        _showSnackBar('端点にスナップしました');
+      } else {
+        setState(() => newPoints.add(point));
+      }
     } else if (isCutting) {
       _cutLineAtPoint(point, layer);
     } else {
@@ -789,13 +799,42 @@ class _MapPageState extends State<MapPage> {
       return;
     }
 
-    final g    = layer.gutters[bestIdx];
-    final pts  = g.points;
-    final proj = bestProj;
+    final g   = layer.gutters[bestIdx];
+    final pts = g.points;
+
+    // 折れ点スナップ：中間点が近ければ射影点の代わりに折れ点で切断
+    LatLng cutPoint = bestProj;
+    int?   snapVertexIdx;
+    if (_snapEnabled) {
+      double bestVertDist = _kSnapRadiusM;
+      for (int k = 1; k < pts.length - 1; k++) { // 両端除く中間点のみ
+        final d = _distance.distance(tapPoint, pts[k]);
+        if (d < bestVertDist) {
+          bestVertDist = d;
+          snapVertexIdx = k;
+        }
+      }
+      if (snapVertexIdx != null) {
+        cutPoint = pts[snapVertexIdx];
+      }
+    }
 
     _saveStateForUndo();
     setState(() {
       layer.gutters.removeAt(bestIdx);
+
+      final List<LatLng> ptsA;
+      final List<LatLng> ptsB;
+      if (snapVertexIdx != null) {
+        // 折れ点ぴったりで切断 → 折れ点は両側に含める
+        ptsA = [...pts.sublist(0, snapVertexIdx + 1)];
+        ptsB = [...pts.sublist(snapVertexIdx)];
+      } else {
+        // 通常の射影点で切断
+        ptsA = [...pts.sublist(0, bestSeg + 1), cutPoint];
+        ptsB = [cutPoint, ...pts.sublist(bestSeg + 1)];
+      }
+
       layer.gutters.add(Gutter(
         id          : '${g.id}-A',
         name        : '${g.name}-A',
@@ -810,7 +849,7 @@ class _MapPageState extends State<MapPage> {
         showHeadMark: g.showHeadMark,
         headMarkSize: g.headMarkSize,
         properties  : Map<String, dynamic>.from(g.properties),
-        points      : [...pts.sublist(0, bestSeg + 1), proj],
+        points      : ptsA,
       ));
       layer.gutters.add(Gutter(
         id          : '${g.id}-B',
@@ -826,12 +865,13 @@ class _MapPageState extends State<MapPage> {
         showHeadMark: g.showHeadMark,
         headMarkSize: g.headMarkSize,
         properties  : Map<String, dynamic>.from(g.properties),
-        points      : [proj, ...pts.sublist(bestSeg + 1)],
+        points      : ptsB,
       ));
     });
 
     _saveToLocalStorage();
-    _showSnackBar('切断完了 (${bestDist.toStringAsFixed(1)}m)');
+    final snapMsg = snapVertexIdx != null ? '（折れ点スナップ）' : '';
+    _showSnackBar('切断完了 (${bestDist.toStringAsFixed(1)}m) $snapMsg');
   }
 
   LatLng _projectOnSegment(LatLng p, LatLng a, LatLng b) {
@@ -842,6 +882,26 @@ class _MapPageState extends State<MapPage> {
     final t  = ((p.longitude - a.longitude) * dx + (p.latitude - a.latitude) * dy) / len2;
     final tc = t.clamp(0.0, 1.0);
     return LatLng(a.latitude + tc * dy, a.longitude + tc * dx);
+  }
+
+  /// 全レイヤーの端点・折れ点から最近傍を探してスナップ。
+  /// _kSnapRadiusM 以内に点があればその座標を返し、なければ null。
+  LatLng? _trySnap(LatLng tap) {
+    if (!_snapEnabled) return null;
+    double  best    = _kSnapRadiusM;
+    LatLng? snapped;
+    for (final layer in layers) {
+      for (final g in layer.gutters) {
+        for (final pt in g.points) {
+          final d = _distance.distance(tap, pt);
+          if (d < best) {
+            best    = d;
+            snapped = pt;
+          }
+        }
+      }
+    }
+    return snapped;
   }
 
   Gutter? _findNearestGutterInLayer(LatLng tapPoint, GutterLayer layer) {
