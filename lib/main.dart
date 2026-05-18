@@ -958,34 +958,33 @@ class _MapPageState extends State<MapPage> {
                       border   : OutlineInputBorder(),
                     ),
                   ),
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 12),
 
-                  Row(
-                    children: [
-                      Expanded(
-                        child: SwitchListTile(
-                          title         : const Text('流向矢印を表示'),
-                          value         : g.showArrow,
-                          onChanged     : (v) => setS(() => g.showArrow = v),
-                          contentPadding: EdgeInsets.zero,
-                        ),
-                      ),
-                      TextButton.icon(
-                        icon   : const Icon(Icons.swap_horiz),
-                        label  : const Text('反転'),
-                        onPressed: () async {
-                          setState(() => g.points = g.points.reversed.toList());
-                          await _saveToLocalStorage();
-                          _showSnackBar('流向を反転しました');
-                        },
-                      ),
-                      SwitchListTile(
-                      title: const Text('最上流マークを表示'),
-                      value: g.showHeadMark,
-                      onChanged: (v) => setS(() => g.showHeadMark = v),
-                      contentPadding: EdgeInsets.zero,
+                  SwitchListTile.adaptive(
+                    title: const Text('流向矢印を表示'),
+                    value: g.showArrow,
+                    onChanged: (v) => setS(() => g.showArrow = v),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      icon: const Icon(Icons.swap_horiz),
+                      label: const Text('流向を反転'),
+                      onPressed: () async {
+                        setState(() => g.points = g.points.reversed.toList());
+                        await _saveToLocalStorage();
+                        _showSnackBar('流向を反転しました');
+                      },
                     ),
-                    ],
+                  ),
+
+                  SwitchListTile.adaptive(
+                    title: const Text('最上流マークを表示'),
+                    value: g.showHeadMark,
+                    onChanged: (v) => setS(() => g.showHeadMark = v),
+                    contentPadding: EdgeInsets.zero,
                   ),
 
                   const Divider(height: 32),
