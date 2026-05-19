@@ -1,5 +1,6 @@
 // api/uploadToBlob.js
 import { put } from '@vercel/blob';
+import { v4 as uuidv4 } from 'uuid';   // ← UUIDでセキュリティ強化
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -22,14 +23,15 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'No geojson data' });
     }
 
-    const shareId = (rawShareId || Date.now().toString())
-      .replace(/[^a-zA-Z0-9-]/g, '');
+    // shareIdをUUIDで強化（予測されにくい）
+    const shareId = (rawShareId && rawShareId.length > 8) 
+      ? rawShareId 
+      : uuidv4();
 
     const filename = `shared/${shareId}.geojson`;
 
-    // Private対応
     const blob = await put(filename, JSON.stringify(geojson), {
-      access: 'private',           // ← Privateに変更
+      access: 'public',           // Public
       addRandomSuffix: false,
       cacheControlMaxAge: 0,
     });
@@ -38,7 +40,7 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       success: true,
-      rawUrl: blob.url,        // これが署名付きURLになる
+      rawUrl: blob.url,
       shareUrl: shareUrl,
       shareId: shareId,
     });
