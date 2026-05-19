@@ -195,6 +195,9 @@ class Gutter {
   double strokeWidth;
   bool showHeadMark;
   double headMarkSize;
+  // 勾配フィールド（始点・終点の標高差と勾配）
+  double? elevationStart;  // 始点標高（m）
+  double? elevationEnd;    // 終点標高（m）
 
   Gutter({
     required this.id,
@@ -211,43 +214,75 @@ class Gutter {
     this.strokeWidth  = 7.5,
     this.showHeadMark = false,
     this.headMarkSize = 10.0,
+    this.elevationStart,
+    this.elevationEnd,
   })  : color      = color ?? Colors.blue,
         properties = properties ?? {};
 
+  /// 計算された勾配（1/N 表記の分母 N）。null なら未設定
+  double? get gradientDenominator {
+    if (elevationStart == null || elevationEnd == null) return null;
+    if (points.length < 2) return null;
+    final heightDiff = (elevationStart! - elevationEnd!).abs();
+    if (heightDiff < 1e-6) return null;
+    // 2点間の水平距離（メートル）
+    double totalDist = 0;
+    const mPerDegLat = 111320.0;
+    for (int i = 0; i < points.length - 1; i++) {
+      final dy = (points[i + 1].latitude  - points[i].latitude)  * mPerDegLat;
+      final dx = (points[i + 1].longitude - points[i].longitude) *
+          mPerDegLat * math.cos(points[i].latitude * math.pi / 180);
+      totalDist += math.sqrt(dx * dx + dy * dy);
+    }
+    if (totalDist < 1e-3) return null;
+    return totalDist / heightDiff;
+  }
+
+  /// 勾配を文字列で返す。例: "1/200" or "---"
+  String get gradientLabel {
+    final n = gradientDenominator;
+    if (n == null) return '---';
+    return '1/${n.round()}';
+  }
+
   Map<String, dynamic> toJson() => {
-    'id'          : id,
-    'name'        : name,
-    'shape'       : shape,
-    'diameter'    : diameter,
-    'memo'        : memo,
-    'flowReversed': flowReversed,
-    'color'       : color.toARGB32(),
-    'points'      : points.map((p) => [p.longitude, p.latitude]).toList(),
-    'properties'  : properties,
-    'showArrow'   : showArrow,
-    'arrowSize'   : arrowSize,
-    'strokeWidth' : strokeWidth,
-    'showHeadMark': showHeadMark,
-    'headMarkSize': headMarkSize,
+    'id'            : id,
+    'name'          : name,
+    'shape'         : shape,
+    'diameter'      : diameter,
+    'memo'          : memo,
+    'flowReversed'  : flowReversed,
+    'color'         : color.toARGB32(),
+    'points'        : points.map((p) => [p.longitude, p.latitude]).toList(),
+    'properties'    : properties,
+    'showArrow'     : showArrow,
+    'arrowSize'     : arrowSize,
+    'strokeWidth'   : strokeWidth,
+    'showHeadMark'  : showHeadMark,
+    'headMarkSize'  : headMarkSize,
+    'elevationStart': elevationStart,
+    'elevationEnd'  : elevationEnd,
   };
 
   factory Gutter.fromJson(Map<String, dynamic> j) => Gutter(
-    id          : j['id']?.toString()       ?? '',
-    name        : j['name']?.toString()     ?? '',
-    shape       : j['shape']?.toString()    ?? '---',
-    diameter    : j['diameter']?.toString() ?? '---',
-    memo        : j['memo']?.toString()     ?? '',
-    flowReversed: j['flowReversed'] as bool? ?? false,
-    color       : Color(j['color'] as int?  ?? Colors.blue.toARGB32()),
-    points      : (j['points'] as List<dynamic>)
+    id             : j['id']?.toString()       ?? '',
+    name           : j['name']?.toString()     ?? '',
+    shape          : j['shape']?.toString()    ?? '---',
+    diameter       : j['diameter']?.toString() ?? '---',
+    memo           : j['memo']?.toString()     ?? '',
+    flowReversed   : j['flowReversed'] as bool? ?? false,
+    color          : Color(j['color'] as int?  ?? Colors.blue.toARGB32()),
+    points         : (j['points'] as List<dynamic>)
         .map((e) => LatLng((e[1] as num).toDouble(), (e[0] as num).toDouble()))
         .toList(),
-    properties  : Map<String, dynamic>.from(j['properties'] ?? {}),
-    showArrow   : j['showArrow']   as bool? ?? false,
-    arrowSize   : (j['arrowSize']   as num?)?.toDouble() ?? 12.0,
-    strokeWidth : (j['strokeWidth'] as num?)?.toDouble() ?? 7.5,
-    showHeadMark: j['showHeadMark'] as bool? ?? false,
-    headMarkSize: (j['headMarkSize'] as num?)?.toDouble() ?? 10.0,
+    properties     : Map<String, dynamic>.from(j['properties'] ?? {}),
+    showArrow      : j['showArrow']   as bool? ?? false,
+    arrowSize      : (j['arrowSize']   as num?)?.toDouble() ?? 12.0,
+    strokeWidth    : (j['strokeWidth'] as num?)?.toDouble() ?? 7.5,
+    showHeadMark   : j['showHeadMark'] as bool? ?? false,
+    headMarkSize   : (j['headMarkSize'] as num?)?.toDouble() ?? 10.0,
+    elevationStart : (j['elevationStart'] as num?)?.toDouble(),
+    elevationEnd   : (j['elevationEnd']   as num?)?.toDouble(),
   );
 }
 
@@ -288,8 +323,8 @@ class _MapPageState extends State<MapPage> {
   // ズームレベルに応じた線幅スケーリング用
   double _currentZoom = 17.0;
 
-  // 端点スナップ ON/OFF
-  bool _snapEnabled = true;
+  // 端点スナップ ON/OFF（変更しないため final）
+  final bool _snapEnabled = true;
   static const _kSnapRadiusM = 15.0; // スナップ判定距離（メートル）
 
   // ================================================================
@@ -738,19 +773,22 @@ class _MapPageState extends State<MapPage> {
               'name': g.name,
               ...g.properties,
               if (withLayerMeta) ...{
-                'layer'       : layer.name,
-                'layerId'     : layer.id,
-                'layerVisible': layer.visible,
-                'shape'       : g.shape,
-                'diameter'    : g.diameter,
-                'memo'        : g.memo,
-                'flowReversed': g.flowReversed,
-                'color'       : g.color.toARGB32(),
-                'strokeWidth' : g.strokeWidth,
-                'showArrow'   : g.showArrow,
-                'arrowSize'   : g.arrowSize,
-                'showHeadMark': g.showHeadMark,
-                'headMarkSize': g.headMarkSize,
+                'layer'          : layer.name,
+                'layerId'        : layer.id,
+                'layerVisible'   : layer.visible,
+                'shape'          : g.shape,
+                'diameter'       : g.diameter,
+                'memo'           : g.memo,
+                'flowReversed'   : g.flowReversed,
+                'color'          : g.color.toARGB32(),
+                'strokeWidth'    : g.strokeWidth,
+                'showArrow'      : g.showArrow,
+                'arrowSize'      : g.arrowSize,
+                'showHeadMark'   : g.showHeadMark,
+                'headMarkSize'   : g.headMarkSize,
+                if (g.elevationStart != null) 'elevationStart': g.elevationStart,
+                if (g.elevationEnd   != null) 'elevationEnd'  : g.elevationEnd,
+                if (g.gradientLabel  != '---') 'gradient'     : g.gradientLabel,
               },
             },
           },
@@ -948,36 +986,38 @@ class _MapPageState extends State<MapPage> {
       }
 
       layer.gutters.add(Gutter(
-        id          : '${g.id}-A',
-        name        : '${g.name}-A',
-        shape       : g.shape,
-        diameter    : g.diameter,
-        memo        : g.memo,
-        flowReversed: g.flowReversed,
-        color       : g.color,
-        showArrow   : g.showArrow,
-        arrowSize   : g.arrowSize,
-        strokeWidth : g.strokeWidth,
-        showHeadMark: g.showHeadMark,
-        headMarkSize: g.headMarkSize,
-        properties  : Map<String, dynamic>.from(g.properties),
-        points      : ptsA,
+        id             : '${g.id}-A',
+        name           : '${g.name}-A',
+        shape          : g.shape,
+        diameter       : g.diameter,
+        memo           : g.memo,
+        flowReversed   : g.flowReversed,
+        color          : g.color,
+        showArrow      : g.showArrow,
+        arrowSize      : g.arrowSize,
+        strokeWidth    : g.strokeWidth,
+        showHeadMark   : g.showHeadMark,
+        headMarkSize   : g.headMarkSize,
+        properties     : Map<String, dynamic>.from(g.properties),
+        points         : ptsA,
+        elevationStart : g.elevationStart,  // 始点→切断点は始点標高引き継ぎ
       ));
       layer.gutters.add(Gutter(
-        id          : '${g.id}-B',
-        name        : '${g.name}-B',
-        shape       : g.shape,
-        diameter    : g.diameter,
-        memo        : g.memo,
-        flowReversed: g.flowReversed,
-        color       : g.color,
-        showArrow   : g.showArrow,
-        arrowSize   : g.arrowSize,
-        strokeWidth : g.strokeWidth,
-        showHeadMark: g.showHeadMark,
-        headMarkSize: g.headMarkSize,
-        properties  : Map<String, dynamic>.from(g.properties),
-        points      : ptsB,
+        id             : '${g.id}-B',
+        name           : '${g.name}-B',
+        shape          : g.shape,
+        diameter       : g.diameter,
+        memo           : g.memo,
+        flowReversed   : g.flowReversed,
+        color          : g.color,
+        showArrow      : g.showArrow,
+        arrowSize      : g.arrowSize,
+        strokeWidth    : g.strokeWidth,
+        showHeadMark   : g.showHeadMark,
+        headMarkSize   : g.headMarkSize,
+        properties     : Map<String, dynamic>.from(g.properties),
+        points         : ptsB,
+        elevationEnd   : g.elevationEnd,    // 切断点→終点は終点標高引き継ぎ
       ));
     });
 
@@ -1202,6 +1242,11 @@ class _MapPageState extends State<MapPage> {
     final shapeCtrl = TextEditingController(text: g.shape);
     final diamCtrl  = TextEditingController(text: g.diameter);
     final memCtrl   = TextEditingController(text: g.memo);
+    // 勾配計算用：始点・終点の標高（m）
+    final elevStartCtrl = TextEditingController(
+        text: g.elevationStart != null ? g.elevationStart!.toStringAsFixed(3) : '');
+    final elevEndCtrl   = TextEditingController(
+        text: g.elevationEnd   != null ? g.elevationEnd!.toStringAsFixed(3)   : '');
 
     showModalBottomSheet(
       context           : context,
@@ -1296,6 +1341,108 @@ class _MapPageState extends State<MapPage> {
                         border   : OutlineInputBorder(),
                         isDense  : true,
                       ),
+                    ),
+                    const SizedBox(height: 14),
+
+                    // ── 勾配計算セクション ──────────────────────────
+                    const Text('勾配計算',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                    const SizedBox(height: 4),
+                    Text(
+                      '始点（流向の起点）から終点に向かう方向で入力してください',
+                      style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller : elevStartCtrl,
+                            keyboardType: const TextInputType.numberWithOptions(
+                                decimal: true, signed: true),
+                            decoration : const InputDecoration(
+                              labelText: '始点標高 (m)',
+                              border   : OutlineInputBorder(),
+                              isDense  : true,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: TextField(
+                            controller : elevEndCtrl,
+                            keyboardType: const TextInputType.numberWithOptions(
+                                decimal: true, signed: true),
+                            decoration : const InputDecoration(
+                              labelText: '終点標高 (m)',
+                              border   : OutlineInputBorder(),
+                              isDense  : true,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    // 勾配プレビュー（リアルタイム計算表示）
+                    StatefulBuilder(
+                      builder: (context, setSG) {
+                        // テキスト変化を監視してリビルド
+                        elevStartCtrl.addListener(() => setSG(() {}));
+                        elevEndCtrl.addListener(()   => setSG(() {}));
+
+                        final startM = double.tryParse(elevStartCtrl.text);
+                        final endM   = double.tryParse(elevEndCtrl.text);
+
+                        String gradLabel = '---';
+                        String heightLabel = '---';
+                        Color  labelColor  = Colors.grey;
+
+                        if (startM != null && endM != null && g.points.length >= 2) {
+                          // 水平距離計算
+                          double totalDist = 0;
+                          const mPerDegLat = 111320.0;
+                          for (int i = 0; i < g.points.length - 1; i++) {
+                            final dy = (g.points[i + 1].latitude  - g.points[i].latitude)  * mPerDegLat;
+                            final dx = (g.points[i + 1].longitude - g.points[i].longitude) *
+                                mPerDegLat * math.cos(g.points[i].latitude * math.pi / 180);
+                            totalDist += math.sqrt(dx * dx + dy * dy);
+                          }
+                          final diff = startM - endM;  // 正=下り、負=上り
+                          heightLabel = '高低差: ${diff.abs().toStringAsFixed(3)} m'
+                              ' / 延長: ${totalDist.toStringAsFixed(1)} m';
+                          if (diff.abs() > 1e-6 && totalDist > 1e-3) {
+                            final n = totalDist / diff.abs();
+                            gradLabel = '勾配: 1/${n.round()}';
+                            labelColor = diff > 0 ? Colors.blue.shade700 : Colors.orange.shade700;
+                          } else if (diff.abs() < 1e-6) {
+                            gradLabel = '勾配: 水平（0）';
+                            labelColor = Colors.grey;
+                          }
+                        }
+
+                        return Container(
+                          padding   : const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          decoration: BoxDecoration(
+                            color       : Colors.blue.shade50,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(gradLabel,
+                                  style: TextStyle(
+                                    fontSize  : 15,
+                                    fontWeight: FontWeight.bold,
+                                    color     : labelColor,
+                                  )),
+                              if (heightLabel != '---')
+                                Text(heightLabel,
+                                    style: TextStyle(
+                                        fontSize: 12, color: Colors.grey.shade700)),
+                            ],
+                          ),
+                        );
+                      },
                     ),
                     const SizedBox(height: 12),
 
@@ -1406,12 +1553,26 @@ class _MapPageState extends State<MapPage> {
                                 g.shape    = shapeCtrl.text.trim();
                                 g.diameter = diamCtrl.text.trim();
                                 g.memo     = memCtrl.text.trim();
+                                g.elevationStart = double.tryParse(elevStartCtrl.text);
+                                g.elevationEnd   = double.tryParse(elevEndCtrl.text);
+                                // カテゴリ色分けがpropertiesを参照するため
+                                // フィールドと同期して書き込む
+                                g.properties['shape']          = g.shape;
+                                g.properties['diameter']       = g.diameter;
+                                g.properties['memo']           = g.memo;
+                                g.properties['name']           = g.name;
+                                if (g.elevationStart != null)
+                                  g.properties['elevationStart'] = g.elevationStart;
+                                if (g.elevationEnd != null)
+                                  g.properties['elevationEnd']   = g.elevationEnd;
+                                if (g.gradientLabel != '---')
+                                  g.properties['gradient']       = g.gradientLabel;
                               });
                               await _saveToLocalStorage();
                               if (!ctx.mounted) return;
                               Navigator.pop(ctx);
                               if (!mounted) return;
-                              _showSnackBar('保存しました');
+                              _showSnackBar('保存しました（勾配: ${g.gradientLabel}）');
                             },
                             child: const Text('保存'),
                           ),
@@ -1450,21 +1611,65 @@ class _MapPageState extends State<MapPage> {
     required bool Function(String option, String input) filter,
     required TextEditingController ctrl,
   }) {
-    return DropdownMenu<String>(
-      controller      : ctrl,
-      label           : Text(label),
-      hintText        : hint,
-      width           : double.infinity,
-      enableSearch    : true,
-      enableFilter    : true,
-      initialSelection: initial.isEmpty ? null : initial,
-      dropdownMenuEntries: options.map((o) => DropdownMenuEntry<String>(
-        value: o,
-        label: display(o),
-      )).toList(),
-      onSelected: (value) {
-        if (value != null) ctrl.text = value;
+    // 最大表示件数：5件。それ以上はスクロール
+    const maxItems     = 5;
+    const itemHeight   = 48.0;
+
+    return Autocomplete<String>(
+      initialValue: TextEditingValue(text: initial == '---' ? '' : initial),
+      optionsBuilder: (textEditingValue) {
+        final input = textEditingValue.text;
+        if (input.isEmpty) return options;
+        return options.where((o) => filter(o, input));
       },
+      displayStringForOption: display,
+      fieldViewBuilder: (context, textCtrl, focusNode, onFieldSubmitted) {
+        // 外部 ctrl と同期
+        textCtrl.text = ctrl.text == '---' ? '' : ctrl.text;
+        textCtrl.addListener(() => ctrl.text = textCtrl.text.isEmpty ? '---' : textCtrl.text);
+        return TextField(
+          controller : textCtrl,
+          focusNode  : focusNode,
+          decoration : InputDecoration(
+            labelText: label,
+            hintText : hint,
+            border   : const OutlineInputBorder(),
+            isDense  : true,
+          ),
+          onSubmitted: (_) => onFieldSubmitted(),
+        );
+      },
+      optionsViewBuilder: (context, onSelected, options) {
+        final list = options.toList();
+        final viewHeight = math.min(list.length, maxItems) * itemHeight;
+        return Align(
+          alignment: Alignment.topLeft,
+          child: Material(
+            elevation: 4,
+            borderRadius: BorderRadius.circular(8),
+            child: SizedBox(
+              width : 300,  // フィールド幅に合わせて適宜調整
+              height: viewHeight,
+              child : ListView.builder(
+                padding    : EdgeInsets.zero,
+                itemCount  : list.length,
+                itemExtent : itemHeight,
+                itemBuilder: (context, index) {
+                  final option = list[index];
+                  return InkWell(
+                    onTap: () => onSelected(option),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      child  : Text(display(option)),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      },
+      onSelected: (value) => ctrl.text = value,
     );
   }
 
@@ -2024,6 +2229,7 @@ class _MapPageState extends State<MapPage> {
     options      : MapOptions(
       initialCenter: const LatLng(36.555, 139.882),
       initialZoom  : 17.0,
+      maxZoom      : 22.0,   // ← マップ自体のズーム上限を22に設定
       onTap        : _addPoint,
       onMapEvent   : (event) {
         final zoom = event.camera.zoom;
@@ -2167,6 +2373,11 @@ class _MapPageState extends State<MapPage> {
             label  : 'アップロード共有',
             icon   : Icons.cloud_upload,
             onTap  : () { setState(() => _fabExpanded = false); _uploadAllLayers(); },
+          ),
+          _menuRow(
+            label  : 'Raw URL→共有URL',
+            icon   : Icons.link,
+            onTap  : () { setState(() => _fabExpanded = false); _generateShareUrl(); },
           ),
           const SizedBox(height: 4),
           const Divider(height: 1),
