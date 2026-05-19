@@ -1192,9 +1192,10 @@ class _MapPageState extends State<MapPage> {
       return;
     }
 
-    // === 矢印方向修正 ===
-    final dx = end.longitude - start.longitude;   // 東方向
-    final dy = start.latitude - end.latitude;     // 北方向（進行方向）
+    // start（1点目）が根本、end（2点目）が先端になるよう方向を計算する。
+    // atan2(東成分, 北成分) で北=0°・時計回りの方位角を求める。
+    final dx = end.longitude - start.longitude;  // 東方向成分（正=東）
+    final dy = end.latitude  - start.latitude;   // 北方向成分（正=北）
 
     double angleDeg = math.atan2(dx, dy) * 180 / math.pi;
     if (angleDeg < 0) angleDeg += 360;
@@ -1698,14 +1699,31 @@ class _MapPageState extends State<MapPage> {
 
   List<String> _getUniqueValues(GutterLayer layer, String? key) {
     if (key == null) return [];
-    return ({
+    final values = {
       for (final g in layer.gutters)
         // '---' や空文字は「未分類」に統一
         () {
           final v = g.properties[key]?.toString().trim() ?? '';
           return (v.isEmpty || v == '---') ? '未分類' : v;
         }(),
-    }.toList()..sort());
+    }.toList();
+
+    // キーが 'layer'（レイヤー名）の場合はドロワーの layers リスト順に揃える。
+    // それ以外はアルファベット順。
+    if (key == 'layer') {
+      final layerOrder = {
+        for (int i = 0; i < layers.length; i++) layers[i].name: i,
+      };
+      values.sort((a, b) {
+        final ia = layerOrder[a] ?? layers.length; // 未登録は末尾
+        final ib = layerOrder[b] ?? layers.length;
+        if (ia != ib) return ia.compareTo(ib);
+        return a.compareTo(b); // 同順位なら名前順
+      });
+    } else {
+      values.sort();
+    }
+    return values;
   }
 
   Map<String, Color> _generateCategoryColors(GutterLayer layer, String key) {
