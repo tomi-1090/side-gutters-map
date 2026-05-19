@@ -461,6 +461,8 @@ class _MapPageState extends State<MapPage> {
         headMarkSize: (props['headMarkSize'] as num?)?.toDouble() ?? 10.0,
         points      : points,
         properties  : mergedProps,
+        elevationStart : (props['elevationStart'] as num?)?.toDouble(),
+        elevationEnd   : (props['elevationEnd'] as num?)?.toDouble(),
       ));
     }
     return result;
