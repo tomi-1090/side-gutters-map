@@ -1131,7 +1131,7 @@ class _MapPageState extends State<MapPage> {
       return;
     }
 
-    final ctrl = TextEditingController(text: '側溝 SG-00$_newGutterCounter');
+    final ctrl = TextEditingController(text: '');
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -1864,6 +1864,153 @@ class _MapPageState extends State<MapPage> {
   }
 
   // ================================================================
+  // 一括スタイル変更（レイヤー内の全路線）
+  // ================================================================
+
+  void _showBulkStyleDialog(int layerIndex) {
+    final layer = layers[layerIndex];
+    if (layer.gutters.isEmpty) {
+      _showSnackBar('このレイヤーに路線がありません');
+      return;
+    }
+
+    // 現在値の代表値（最初の路線から取得）
+    double bulkStroke    = layer.gutters.first.strokeWidth;
+    bool   bulkShowArrow = layer.gutters.first.showArrow;
+    double bulkArrowSize = layer.gutters.first.arrowSize;
+    bool   bulkShowHead  = layer.gutters.first.showHeadMark;
+    double bulkHeadSize  = layer.gutters.first.headMarkSize;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setS) => AlertDialog(
+          title: Text('一括スタイル変更\n「${layer.name}」', style: const TextStyle(fontSize: 15)),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // ── 線の太さ ──────────────────────────────────────
+                const Text('線の太さ', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Slider(
+                        value    : bulkStroke,
+                        min      : 3.0,
+                        max      : 15.0,
+                        divisions: 24,
+                        label    : bulkStroke.toStringAsFixed(1),
+                        onChanged: (v) => setS(() => bulkStroke = v),
+                      ),
+                    ),
+                    SizedBox(
+                      width: 32,
+                      child: Text(bulkStroke.toStringAsFixed(1),
+                          style: const TextStyle(fontSize: 12)),
+                    ),
+                  ],
+                ),
+                const Divider(height: 20),
+
+                // ── 流向矢印 ─────────────────────────────────────
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('流向矢印（ライン末端）',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                    Switch.adaptive(
+                        value: bulkShowArrow, onChanged: (v) => setS(() => bulkShowArrow = v)),
+                  ],
+                ),
+                if (bulkShowArrow)
+                  Row(
+                    children: [
+                      const Text('矢印サイズ', style: TextStyle(fontSize: 12)),
+                      Expanded(
+                        child: Slider(
+                          value    : bulkArrowSize,
+                          min      : 5.0,
+                          max      : 20.0,
+                          divisions: 30,
+                          label    : bulkArrowSize.toStringAsFixed(1),
+                          onChanged: (v) => setS(() => bulkArrowSize = v),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 32,
+                        child: Text(bulkArrowSize.toStringAsFixed(1),
+                            style: const TextStyle(fontSize: 12)),
+                      ),
+                    ],
+                  ),
+                const Divider(height: 20),
+
+                // ── 最上流マーク ──────────────────────────────────
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('最上流マーク',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                    Switch.adaptive(
+                        value: bulkShowHead, onChanged: (v) => setS(() => bulkShowHead = v)),
+                  ],
+                ),
+                if (bulkShowHead)
+                  Row(
+                    children: [
+                      const Text('マークサイズ', style: TextStyle(fontSize: 12)),
+                      Expanded(
+                        child: Slider(
+                          value    : bulkHeadSize,
+                          min      : 5.0,
+                          max      : 20.0,
+                          divisions: 30,
+                          label    : bulkHeadSize.toStringAsFixed(1),
+                          onChanged: (v) => setS(() => bulkHeadSize = v),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 32,
+                        child: Text(bulkHeadSize.toStringAsFixed(1),
+                            style: const TextStyle(fontSize: 12)),
+                      ),
+                    ],
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child    : const Text('キャンセル'),
+            ),
+            FilledButton(
+              onPressed: () {
+                _saveStateForUndo();
+                setState(() {
+                  for (final g in layer.gutters) {
+                    g.strokeWidth  = bulkStroke;
+                    g.showArrow    = bulkShowArrow;
+                    g.arrowSize    = bulkArrowSize;
+                    g.showHeadMark = bulkShowHead;
+                    g.headMarkSize = bulkHeadSize;
+                  }
+                });
+                _saveToLocalStorage();
+                Navigator.pop(ctx);
+                _showSnackBar('${layer.gutters.length}本に一括適用しました');
+              },
+              child: const Text('一括適用'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ================================================================
   // 流向矢印
   // ================================================================
 
@@ -1979,7 +2126,8 @@ class _MapPageState extends State<MapPage> {
         content        : Text(message),
         behavior       : SnackBarBehavior.floating,
         duration       : const Duration(seconds: 2),
-        margin         : const EdgeInsets.fromLTRB(16, 0, 16, 80),
+        margin         : const EdgeInsets.fromLTRB(16, 60, 16, 0),
+        // 上部に表示するため SnackBarBehavior.floating + 上マージン設定
       ),
     );
   }
@@ -2565,6 +2713,11 @@ class _MapPageState extends State<MapPage> {
                             icon     : const Icon(Icons.palette, size: 20),
                             tooltip  : 'カテゴリ色分け',
                             onPressed: () => _showCategoryStylingDialog(index),
+                          ),
+                          IconButton(
+                            icon     : const Icon(Icons.tune, size: 20),
+                            tooltip  : '一括スタイル変更',
+                            onPressed: () => _showBulkStyleDialog(index),
                           ),
                           IconButton(
                             icon     : const Icon(Icons.edit, size: 20),
