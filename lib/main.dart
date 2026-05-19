@@ -8,7 +8,6 @@ import 'package:file_picker/file_picker.dart';
 
 import 'dart:convert';
 import 'dart:math' as math;
-import 'dart:ui' as ui;   // ← flutter_map の Path<LatLng> と区別するためエイリアス追加
 
 import 'package:web/web.dart' as web;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -479,8 +478,8 @@ class _MapPageState extends State<MapPage> {
     _showAllGutters();
   }
 
-  // ================================================================
-  // GeoJSON 読み込み（URL）
+   // ================================================================
+  // GeoJSON 読み込み（URL）→ Vercel Blob対応版
   // ================================================================
 
   Future<void> _loadFromUrl(String rawUrl, {bool isShared = false}) async {
@@ -489,50 +488,42 @@ class _MapPageState extends State<MapPage> {
     _showSnackBar(isShared ? '共有URLからデータを読み込み中...' : 'GeoJSONを読み込み中...');
 
     try {
-      // ブラウザから raw.githubusercontent.com へ直接 fetch すると CORS でブロックされる。
-      // Vercel の /api/fetchGeoJson プロキシ経由でサーバーサイド取得する。
-      // shareId を URL の末尾パスから抽出する（拡張子は除去）。
-      final shareId = Uri.parse(cleanUrl).pathSegments.last
-          .replaceAll('.geojson', '');
-
-      final proxyUrl =
-          '${web.window.location.origin}/api/fetchGeoJson?shareId=${Uri.encodeComponent(shareId)}';
-
-      final response = await http.get(Uri.parse(proxyUrl));
+      // ★★★ Vercel BlobはCORS対応済みなので直接取得可能 ★★★
+      final response = await http.get(Uri.parse(rawUrl));
 
       if (response.statusCode != 200) {
         throw Exception('HTTP ${response.statusCode}: ${response.body}');
       }
 
-      final jsonString = utf8.decode(response.bodyBytes);
-
-      final data     = jsonDecode(jsonString) as Map<String, dynamic>;
+      final data     = jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
       final features = data['features'] as List<dynamic>? ?? [];
 
       if (isShared) {
+        // shareIdを保存（後で再利用するため）
         try {
+          final shareId = Uri.parse(cleanUrl).pathSegments.last
+              .replaceAll('.geojson', '')
+              .replaceAll('shared/', '');
           web.window.localStorage.setItem(_kShareIdKey, shareId);
         } catch (_) {}
+
         _sharedGeoJsonUrl = cleanUrl;
 
-        // _buildFeatureList(withLayerMeta: true) で保存した場合、
-        // 各 Feature の properties に 'layer' / 'layerId' が含まれる。
-        // それでグループ化してレイヤーごとに復元する。
+        // レイヤー情報付きかどうか判定
         final hasLayerMeta = features.isNotEmpty &&
             ((features.first['properties'] as Map<String, dynamic>?)
-                    ?.containsKey('layer') ==
-                true);
+                    ?.containsKey('layer') == true);
 
         if (hasLayerMeta) {
-          // layerId 順を維持しながらグループ化（LinkedHashMap で挿入順保持）
           final layerMap = <String, List<dynamic>>{};
           final layerNames = <String, String>{};
+
           for (final f in features) {
             final props   = f['properties'] as Map<String, dynamic>? ?? {};
             final layerId = props['layerId']?.toString() ??
-                props['layer']?.toString() ??
-                'default';
+                props['layer']?.toString() ?? 'default';
             final layerName = props['layer']?.toString() ?? '共有データ';
+
             layerMap.putIfAbsent(layerId, () => []).add(f);
             layerNames[layerId] = layerName;
           }
@@ -549,12 +540,13 @@ class _MapPageState extends State<MapPage> {
               if (gutters.isEmpty) continue;
               total += gutters.length;
               layers.add(GutterLayer(
-                id     : entry.key,
-                name   : layerNames[entry.key] ?? '共有データ',
+                id: entry.key,
+                name: layerNames[entry.key] ?? '共有データ',
                 gutters: gutters,
               ));
             }
           });
+
           if (layers.isNotEmpty) _showAllGutters();
           await _saveToLocalStorage();
           _showSnackBar('$total本の側溝を${layerMap.length}レイヤーで読み込みました');
@@ -562,7 +554,7 @@ class _MapPageState extends State<MapPage> {
         }
       }
 
-      // layerMeta なし（または非共有URL）→ 従来どおり1レイヤーとして追加
+      // layerMetaなしの場合（1レイヤーとして追加）
       final gutters = _parseGeoJsonFeatures(features);
       if (gutters.isEmpty) {
         _showSnackBar('有効なラインが見つかりませんでした');
@@ -582,7 +574,7 @@ class _MapPageState extends State<MapPage> {
       if (isShared) await _loadFromLocalStorage();
     }
   }
-
+  
   // ================================================================
   // GeoJSON 読み込み（ファイル）
   // ================================================================
@@ -649,8 +641,8 @@ class _MapPageState extends State<MapPage> {
     }
   }
 
-  // ================================================================
-  // GeoJSON アップロード（全レイヤー共有）
+    // ================================================================
+  // GeoJSON アップロード（全レイヤー共有）→ Vercel Blob版
   // ================================================================
 
   Future<void> _uploadAllLayers() async {
@@ -660,20 +652,25 @@ class _MapPageState extends State<MapPage> {
     }
 
     try {
+      // shareIdの決定（既存があれば再利用）
       String shareId;
       if (_sharedGeoJsonUrl != null) {
-        shareId = Uri.parse(_sharedGeoJsonUrl!).pathSegments.last.replaceAll('.geojson', '');
+        shareId = Uri.parse(_sharedGeoJsonUrl!).pathSegments.last
+            .replaceAll('.geojson', '')
+            .replaceAll('shared/', ''); // Blobの場合の余分なパス対策
       } else {
         try {
           shareId = web.window.localStorage.getItem(_kShareIdKey) ?? '';
-          if (shareId.isEmpty) shareId = DateTime.now().millisecondsSinceEpoch.toString();
+          if (shareId.isEmpty) {
+            shareId = DateTime.now().millisecondsSinceEpoch.toString();
+          }
         } catch (_) {
           shareId = DateTime.now().millisecondsSinceEpoch.toString();
         }
       }
 
       final features = _buildFeatureList(withLayerMeta: true);
-      final geojson  = {
+      final geojson = {
         'type'         : 'FeatureCollection',
         'features'     : features,
         'exported_at'  : DateTime.now().toIso8601String(),
@@ -681,56 +678,67 @@ class _MapPageState extends State<MapPage> {
         'gutters_count': features.length,
       };
 
-      final apiUrl   = '${web.window.location.origin}/api/uploadGeoJson';
+      // ★★★ ここをBlob用のAPIに変更 ★★★
+      final apiUrl = '${web.window.location.origin}/api/uploadToBlob';
+
       final response = await http.post(
         Uri.parse(apiUrl),
         headers: {'Content-Type': 'application/json'},
-        body   : jsonEncode({'shareId': shareId, 'geojson': geojson}),
+        body: jsonEncode({
+          'shareId': shareId,
+          'geojson': geojson,
+        }),
       );
 
       if (response.statusCode != 200) {
         throw Exception('HTTP ${response.statusCode}: ${response.body}');
       }
 
-      final data   = jsonDecode(response.body) as Map<String, dynamic>;
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
       final rawUrl = data['rawUrl'] as String;
       _sharedGeoJsonUrl = rawUrl;
 
+      // localStorageにも保存
       try {
         web.window.localStorage.setItem(_kShareIdKey, data['shareId'] as String? ?? shareId);
       } catch (_) {}
 
-      // /?geojson= パラメータで共有（キャッシュバスターなし）
-      final shareUrl = '${web.window.location.origin}/?geojson=${Uri.encodeComponent(rawUrl)}';
+      final shareUrl = data['shareUrl'] as String? ?? 
+          '${web.window.location.origin}/?geojson=${Uri.encodeComponent(rawUrl)}';
 
       try {
         await Clipboard.setData(ClipboardData(text: shareUrl));
       } catch (_) {}
 
       if (!mounted) return;
+
       _showShareDialog(shareUrl);
-      _showSnackBar('${features.length}本を共有しました');
+      _showSnackBar('✅ 即時アップロード完了！（${features.length}本）');
 
     } catch (e) {
       _showSnackBar('アップロード失敗: $e');
+      debugPrint('Upload error: $e');
     }
   }
 
+  // ダイアログも少し修正（5分待つ必要がなくなったので）
   void _showShareDialog(String shareUrl) {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        title  : const Text('共有URL生成完了⚠アップロード完了まで5分程度かかります⚠'),
+        title: const Text('共有URL生成完了'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('クリップボードにコピー済みです。', style: TextStyle(color: Colors.green)),
+            const Text('✅ 即時反映されます！', style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 12),
+            const Text('クリップボードにコピー済みです。'),
             const SizedBox(height: 12),
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color       : Colors.grey.shade100,
+                color: Colors.grey.shade100,
                 borderRadius: BorderRadius.circular(8),
               ),
               child: SelectableText(
@@ -742,13 +750,13 @@ class _MapPageState extends State<MapPage> {
         ),
         actions: [
           TextButton.icon(
-            icon     : const Icon(Icons.copy),
-            label    : const Text('再コピー'),
+            icon: const Icon(Icons.copy),
+            label: const Text('再コピー'),
             onPressed: () => Clipboard.setData(ClipboardData(text: shareUrl)),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context),
-            child    : const Text('閉じる'),
+            child: const Text('閉じる'),
           ),
         ],
       ),
@@ -1448,12 +1456,15 @@ class _MapPageState extends State<MapPage> {
                                 g.properties['diameter']       = g.diameter;
                                 g.properties['memo']           = g.memo;
                                 g.properties['name']           = g.name;
-                                if (g.elevationStart != null)
+                                if (g.elevationStart != null){
                                   g.properties['elevationStart'] = g.elevationStart;
-                                if (g.elevationEnd != null)
+                                }
+                                if (g.elevationEnd != null){
                                   g.properties['elevationEnd']   = g.elevationEnd;
-                                if (g.gradientLabel != '---')
+                                }
+                                if (g.gradientLabel != '---'){
                                   g.properties['gradient']       = g.gradientLabel;
+                                }
                               });
                               await _saveToLocalStorage();
                               if (!ctx.mounted) return;
@@ -1678,7 +1689,7 @@ class _MapPageState extends State<MapPage> {
 
   List<String> _getAllPropertyKeys(GutterLayer layer) {
     // カテゴリ色分けに意味のないキーを除外
-    const _kExcludeKeys = {
+    const excludeKeys = {
       'color', 'strokeWidth', 'showArrow', 'arrowSize',
       'showHeadMark', 'headMarkSize', 'flowReversed',
       'layerId', 'layerVisible',
@@ -1686,7 +1697,7 @@ class _MapPageState extends State<MapPage> {
     return ({
       for (final g in layer.gutters) ...g.properties.keys,
     }
-      .where((k) => !_kExcludeKeys.contains(k))
+      .where((k) => !excludeKeys.contains(k))
       .toList()
       ..sort((a, b) {
         // 日本語ラベルがあるキーを上位に
