@@ -33,7 +33,7 @@ export default async function handler(req, res) {
       cacheControlMaxAge: 0,
     });
 
-    const shareUrl = `${req.headers.origin || 'https://your-project.vercel.app'}/?geojson=${encodeURIComponent(blob.url)}`;
+    const shareUrl = `${req.headers.origin || 'https://side-gutters-map-xnop.vercel.app/'}/?geojson=${encodeURIComponent(blob.url)}`;
 
     return res.status(200).json({
       success: true,
