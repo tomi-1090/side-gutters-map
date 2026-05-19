@@ -38,8 +38,26 @@ class MyApp extends StatelessWidget {
 // ================================================================
 
 const _kTileUrls = {
-  'osm'      : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-  'gsi_photo': 'https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg',
+  'osm'       : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+  // 国土地理院 シームレス航空写真（ネイティブズーム上限 18）
+  'gsi_photo' : 'https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg',
+  // ESRI World Imagery（ネイティブズーム上限 23・高解像度）
+  // ※商用利用の際は ESRI の利用規約を確認してください
+  'esri_photo': 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+};
+
+// タイル選択肢の表示ラベル
+const _kTileLabels = {
+  'osm'       : 'OpenStreetMap',
+  'gsi_photo' : '航空写真（国土地理院）',
+  'esri_photo': '航空写真・高解像度（ESRI）',
+};
+
+// タイルごとのネイティブズーム上限
+const _kTileMaxNativeZoom = {
+  'osm'       : 19,
+  'gsi_photo' : 18,
+  'esri_photo': 23,
 };
 
 const _kColorPalette = [
@@ -64,6 +82,32 @@ const _kShareIdKey = 'share_id';
 // Undo履歴上限
 const _kUndoLimit = 20;
 
+// GeoJSONプロパティキー → 日本語表示名マッピング
+// カテゴリ色分けダイアログの属性選択ドロップダウンで使用
+const _kPropKeyLabels = <String, String>{
+  'shape'          : '断面形状',
+  'diameter'       : '管径・口径',
+  'memo'           : 'メモ',
+  'name'           : '名称',
+  'id'             : 'ID',
+  'flowReversed'   : '流向反転',
+  'gradient'       : '勾配',
+  'layer'          : 'レイヤー名',
+  'layerId'        : 'レイヤーID',
+  'layerVisible'   : 'レイヤー表示',
+  'color'          : '色',
+  'strokeWidth'    : '線幅',
+  'showArrow'      : '流向矢印',
+  'arrowSize'      : '矢印サイズ',
+  'showHeadMark'   : '最上流マーク',
+  'headMarkSize'   : 'マークサイズ',
+  // 外部GeoJSONでよく使われる日本語キーもそのまま通す
+  '断面形状'       : '断面形状',
+  '口径'           : '管径・口径',
+  'gradient_label' : '勾配',
+  'slope'          : '勾配',
+};
+
 // ================================================================
 // 方向矢印スタンプ（Pointデータ）
 // ================================================================
@@ -75,6 +119,7 @@ class ArrowStamp {
   Color   color;
   double  size;       // メートル換算の表示サイズ
   String  memo;
+  String  gradient;   // 勾配ラベル（例: "1/200"）。未設定は ''
 
   ArrowStamp({
     required this.id,
@@ -83,6 +128,7 @@ class ArrowStamp {
     Color?  color,
     this.size = 15.0,
     this.memo = '',
+    this.gradient = '',
   }) : color = color ?? Colors.red;
 
   Map<String, dynamic> toJson() => {
@@ -93,6 +139,7 @@ class ArrowStamp {
     'color'   : color.toARGB32(),
     'size'    : size,
     'memo'    : memo,
+    'gradient': gradient,
   };
 
   factory ArrowStamp.fromJson(Map<String, dynamic> j) => ArrowStamp(
@@ -104,7 +151,8 @@ class ArrowStamp {
     angleDeg: (j['angleDeg'] as num?)?.toDouble() ?? 0.0,
     color   : Color(j['color'] as int? ?? Colors.red.toARGB32()),
     size    : (j['size']     as num?)?.toDouble() ?? 15.0,
-    memo    : j['memo']?.toString() ?? '',
+    memo    : j['memo']?.toString()     ?? '',
+    gradient: j['gradient']?.toString() ?? '',
   );
 
   /// GeoJSON Feature（Point）として出力
@@ -124,6 +172,7 @@ class ArrowStamp {
       'color'    : color.toARGB32(),
       'size'     : size,
       'memo'     : memo,
+      if (gradient.isNotEmpty) 'gradient': gradient,
       if (layerName.isNotEmpty) 'layer'  : layerName,
       if (layerId.isNotEmpty)   'layerId': layerId,
     },
@@ -309,7 +358,9 @@ class _MapPageState extends State<MapPage> {
   List<LatLng> newPoints    = [];
   bool         isCutting    = false;
   bool         isDeleting   = false;
-  bool         isStamping   = false;   // ← 矢印スタンプ配置モード
+  bool         isStamping   = false;   // 矢印スタンプ配置モード
+  bool         isStamp2Pt   = false;   // 2点指定スタンプモード
+  LatLng?      _stamp2PtFirst;         // 2点指定の1点目
   int          _stampCounter = 1;
 
   // Undo / Redo（差分ではなくスナップショット。上限を絞ってメモリ節約）
@@ -813,32 +864,50 @@ class _MapPageState extends State<MapPage> {
   // ================================================================
 
   void _toggleAddMode() => setState(() {
-    isAddingNew = !isAddingNew;
-    isCutting   = false;
-    isDeleting  = false;
-    isStamping  = false;
+    isAddingNew   = !isAddingNew;
+    isCutting     = false;
+    isDeleting    = false;
+    isStamping    = false;
+    isStamp2Pt    = false;
+    _stamp2PtFirst = null;
     newPoints.clear();
   });
 
   void _toggleCutMode() => setState(() {
-    isCutting   = !isCutting;
-    isAddingNew = false;
-    isDeleting  = false;
-    isStamping  = false;
+    isCutting      = !isCutting;
+    isAddingNew    = false;
+    isDeleting     = false;
+    isStamping     = false;
+    isStamp2Pt     = false;
+    _stamp2PtFirst = null;
   });
 
   void _toggleDeleteMode() => setState(() {
-    isDeleting  = !isDeleting;
-    isAddingNew = false;
-    isCutting   = false;
-    isStamping  = false;
+    isDeleting     = !isDeleting;
+    isAddingNew    = false;
+    isCutting      = false;
+    isStamping     = false;
+    isStamp2Pt     = false;
+    _stamp2PtFirst = null;
   });
 
   void _toggleStampMode() => setState(() {
-    isStamping  = !isStamping;
-    isAddingNew = false;
-    isCutting   = false;
-    isDeleting  = false;
+    isStamping     = !isStamping;
+    isAddingNew    = false;
+    isCutting      = false;
+    isDeleting     = false;
+    isStamp2Pt     = false;
+    _stamp2PtFirst = null;
+    newPoints.clear();
+  });
+
+  void _toggleStamp2PtMode() => setState(() {
+    isStamp2Pt     = !isStamp2Pt;
+    isStamping     = false;
+    isAddingNew    = false;
+    isCutting      = false;
+    isDeleting     = false;
+    _stamp2PtFirst = null;
     newPoints.clear();
   });
 
@@ -889,6 +958,11 @@ class _MapPageState extends State<MapPage> {
 
     if (isStamping) {
       _placeArrowStamp(point, layer);
+      return;
+    }
+
+    if (isStamp2Pt) {
+      _handleStamp2PtTap(point, layer);
       return;
     }
 
@@ -1129,6 +1203,195 @@ class _MapPageState extends State<MapPage> {
   }
 
   // ================================================================
+  // 2点指定スタンプ（方向・勾配を自動計算）
+  // ================================================================
+
+  void _handleStamp2PtTap(LatLng point, GutterLayer layer) {
+    if (_stamp2PtFirst == null) {
+      // 1点目：始点として記録
+      setState(() => _stamp2PtFirst = point);
+      _showSnackBar('1点目を記録。次に終点をタップしてください');
+      return;
+    }
+
+    // 2点目：角度と勾配を計算してダイアログへ
+    final p1 = _stamp2PtFirst!;
+    final p2 = point;
+
+    // 北を0°とした時計回りの角度を計算
+    final dy = p2.latitude  - p1.latitude;
+    final dx = p2.longitude - p1.longitude;
+    const mPerDegLat = 111320.0;
+    final vecY = dy * mPerDegLat;
+    final vecX = dx * mPerDegLat * math.cos(p1.latitude * math.pi / 180);
+
+    // atan2 は東=0°反時計回りなので北=0°時計回りに変換
+    final angleRad = math.atan2(vecX, vecY);
+    final angleDeg = (angleRad * 180 / math.pi + 360) % 360;
+
+    // 2点間の水平距離
+    final dist = math.sqrt(vecX * vecX + vecY * vecY);
+
+    // スタンプの配置位置は中点
+    final midLat = (p1.latitude  + p2.latitude)  / 2;
+    final midLng = (p1.longitude + p2.longitude) / 2;
+    final midPt  = LatLng(midLat, midLng);
+
+    setState(() => _stamp2PtFirst = null);
+
+    // 勾配入力ダイアログを表示
+    _placeStampWithGradient(midPt, angleDeg, dist, layer);
+  }
+
+  /// 2点計算後の勾配入力＆配置ダイアログ
+  void _placeStampWithGradient(
+      LatLng position, double angleDeg, double distM, GutterLayer layer) {
+    Color  tempColor = Colors.red;
+    final  gradCtrl  = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setS) {
+          // 勾配文字列から "1/N" を構築するヘルパー
+          String gradPreview() {
+            final h = double.tryParse(gradCtrl.text);
+            if (h == null || h <= 0 || distM < 1e-3) return '未入力';
+            final n = distM / h;
+            return '1/${n.round()}  （高低差 ${h.toStringAsFixed(3)} m / 延長 ${distM.toStringAsFixed(1)} m）';
+          }
+
+          return AlertDialog(
+            title: const Text('2点指定スタンプ配置'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // 方向プレビュー
+                  Center(
+                    child: SizedBox(
+                      width: 80, height: 80,
+                      child: CustomPaint(
+                        painter: _ArrowPreviewPainter(
+                          angleDeg: angleDeg,
+                          color   : tempColor,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Center(
+                    child: Text(
+                      '方向: ${angleDeg.toStringAsFixed(1)}°（自動計算済み）',
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+
+                  // 勾配（高低差）入力
+                  const Text('高低差（始点→終点、下り正）(m)',
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 4),
+                  TextField(
+                    controller  : gradCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true, signed: true),
+                    decoration  : const InputDecoration(
+                      labelText: '例: 0.200',
+                      border   : OutlineInputBorder(),
+                      isDense  : true,
+                      suffixText: 'm',
+                    ),
+                    onChanged: (_) => setS(() {}),
+                  ),
+                  const SizedBox(height: 8),
+                  // リアルタイムプレビュー
+                  Container(
+                    padding   : const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color       : Colors.blue.shade50,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      gradPreview(),
+                      style: TextStyle(
+                        fontSize  : 13,
+                        fontWeight: FontWeight.bold,
+                        color     : Colors.blue.shade800,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+
+                  // 色選択
+                  const Text('色', style: TextStyle(fontSize: 13)),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 6,
+                    children: [
+                      Colors.red, Colors.blue, Colors.green,
+                      Colors.orange, Colors.purple, Colors.black,
+                    ].map((c) => GestureDetector(
+                      onTap: () => setS(() => tempColor = c),
+                      child: Container(
+                        width: 36, height: 36,
+                        decoration: BoxDecoration(
+                          color : c,
+                          shape : BoxShape.circle,
+                          border: Border.all(
+                            color: tempColor == c ? Colors.black : Colors.transparent,
+                            width: 3,
+                          ),
+                        ),
+                      ),
+                    )).toList(),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child    : const Text('キャンセル'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  // 勾配ラベルを生成
+                  String gradLabel = '';
+                  final h = double.tryParse(gradCtrl.text);
+                  if (h != null && h > 0 && distM > 1e-3) {
+                    final n = distM / h;
+                    gradLabel = '1/${n.round()}';
+                  }
+
+                  _saveStateForUndo();
+                  setState(() {
+                    layer.stamps.add(ArrowStamp(
+                      id      : 'AS-${_stampCounter++}',
+                      position: position,
+                      angleDeg: angleDeg,
+                      color   : tempColor,
+                      gradient: gradLabel,
+                    ));
+                  });
+                  _saveToLocalStorage();
+                  Navigator.pop(ctx);
+                  final msg = gradLabel.isNotEmpty
+                      ? '2点スタンプを配置（勾配 $gradLabel）'
+                      : '2点スタンプを配置しました';
+                  _showSnackBar(msg);
+                },
+                child: const Text('配置'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  // ================================================================
   // 矢印スタンプ配置
   // ================================================================
 
@@ -1341,108 +1604,6 @@ class _MapPageState extends State<MapPage> {
                         border   : OutlineInputBorder(),
                         isDense  : true,
                       ),
-                    ),
-                    const SizedBox(height: 14),
-
-                    // ── 勾配計算セクション ──────────────────────────
-                    const Text('勾配計算',
-                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                    const SizedBox(height: 4),
-                    Text(
-                      '始点（流向の起点）から終点に向かう方向で入力してください',
-                      style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller : elevStartCtrl,
-                            keyboardType: const TextInputType.numberWithOptions(
-                                decimal: true, signed: true),
-                            decoration : const InputDecoration(
-                              labelText: '始点標高 (m)',
-                              border   : OutlineInputBorder(),
-                              isDense  : true,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: TextField(
-                            controller : elevEndCtrl,
-                            keyboardType: const TextInputType.numberWithOptions(
-                                decimal: true, signed: true),
-                            decoration : const InputDecoration(
-                              labelText: '終点標高 (m)',
-                              border   : OutlineInputBorder(),
-                              isDense  : true,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    // 勾配プレビュー（リアルタイム計算表示）
-                    StatefulBuilder(
-                      builder: (context, setSG) {
-                        // テキスト変化を監視してリビルド
-                        elevStartCtrl.addListener(() => setSG(() {}));
-                        elevEndCtrl.addListener(()   => setSG(() {}));
-
-                        final startM = double.tryParse(elevStartCtrl.text);
-                        final endM   = double.tryParse(elevEndCtrl.text);
-
-                        String gradLabel = '---';
-                        String heightLabel = '---';
-                        Color  labelColor  = Colors.grey;
-
-                        if (startM != null && endM != null && g.points.length >= 2) {
-                          // 水平距離計算
-                          double totalDist = 0;
-                          const mPerDegLat = 111320.0;
-                          for (int i = 0; i < g.points.length - 1; i++) {
-                            final dy = (g.points[i + 1].latitude  - g.points[i].latitude)  * mPerDegLat;
-                            final dx = (g.points[i + 1].longitude - g.points[i].longitude) *
-                                mPerDegLat * math.cos(g.points[i].latitude * math.pi / 180);
-                            totalDist += math.sqrt(dx * dx + dy * dy);
-                          }
-                          final diff = startM - endM;  // 正=下り、負=上り
-                          heightLabel = '高低差: ${diff.abs().toStringAsFixed(3)} m'
-                              ' / 延長: ${totalDist.toStringAsFixed(1)} m';
-                          if (diff.abs() > 1e-6 && totalDist > 1e-3) {
-                            final n = totalDist / diff.abs();
-                            gradLabel = '勾配: 1/${n.round()}';
-                            labelColor = diff > 0 ? Colors.blue.shade700 : Colors.orange.shade700;
-                          } else if (diff.abs() < 1e-6) {
-                            gradLabel = '勾配: 水平（0）';
-                            labelColor = Colors.grey;
-                          }
-                        }
-
-                        return Container(
-                          padding   : const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                          decoration: BoxDecoration(
-                            color       : Colors.blue.shade50,
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(gradLabel,
-                                  style: TextStyle(
-                                    fontSize  : 15,
-                                    fontWeight: FontWeight.bold,
-                                    color     : labelColor,
-                                  )),
-                              if (heightLabel != '---')
-                                Text(heightLabel,
-                                    style: TextStyle(
-                                        fontSize: 12, color: Colors.grey.shade700)),
-                            ],
-                          ),
-                        );
-                      },
                     ),
                     const SizedBox(height: 12),
 
@@ -1789,8 +1950,26 @@ class _MapPageState extends State<MapPage> {
     return layers.first;
   }
 
-  List<String> _getAllPropertyKeys(GutterLayer layer) =>
-      ({for (final g in layer.gutters) ...g.properties.keys}.toList()..sort());
+  List<String> _getAllPropertyKeys(GutterLayer layer) {
+    // カテゴリ色分けに意味のないキーを除外
+    const _kExcludeKeys = {
+      'color', 'strokeWidth', 'showArrow', 'arrowSize',
+      'showHeadMark', 'headMarkSize', 'flowReversed',
+      'layerId', 'layerVisible',
+    };
+    return ({
+      for (final g in layer.gutters) ...g.properties.keys,
+    }
+      .where((k) => !_kExcludeKeys.contains(k))
+      .toList()
+      ..sort((a, b) {
+        // 日本語ラベルがあるキーを上位に
+        final aHas = _kPropKeyLabels.containsKey(a) ? 0 : 1;
+        final bHas = _kPropKeyLabels.containsKey(b) ? 0 : 1;
+        if (aHas != bHas) return aHas - bHas;
+        return a.compareTo(b);
+      }));
+  }
 
   List<String> _getUniqueValues(GutterLayer layer, String? key) {
     if (key == null) return [];
@@ -1851,8 +2030,13 @@ class _MapPageState extends State<MapPage> {
                     value     : selectedKey,
                     items     : [
                       const DropdownMenuItem(value: null, child: Text('無効（個別色を使う）')),
-                      ..._getAllPropertyKeys(layer)
-                          .map((k) => DropdownMenuItem(value: k, child: Text(k))),
+                      ..._getAllPropertyKeys(layer).map((k) {
+                        final label = _kPropKeyLabels[k] ?? k; // 日本語ラベルがあれば使う
+                        return DropdownMenuItem(
+                          value: k,
+                          child: Text(label),
+                        );
+                      }),
                     ],
                     onChanged: (val) => setS(() {
                       selectedKey = val;
@@ -2117,11 +2301,12 @@ class _MapPageState extends State<MapPage> {
                   ? '削除モード'
                   : isStamping
                       ? '矢印スタンプモード'
-                      : '側溝踏査マップ',
-      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                      : isStamp2Pt
+                          ? '2点指定スタンプ（${_stamp2PtFirst == null ? "1点目をタップ" : "2点目をタップ"}）'
+                          : '側溝踏査マップ',
+      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
     ),
-    // 通常モード時：選択中レイヤーをサブタイトルに表示
-    bottom: (!isAddingNew && !isCutting && !isDeleting && !isStamping)
+    bottom: (!isAddingNew && !isCutting && !isDeleting && !isStamping && !isStamp2Pt)
         ? PreferredSize(
             preferredSize: const Size.fromHeight(20),
             child: Padding(
@@ -2130,8 +2315,7 @@ class _MapPageState extends State<MapPage> {
                 _currentLayer != null
                     ? '編集中レイヤー：${_currentLayer!.name}'
                     : 'レイヤー未選択',
-                style: const TextStyle(
-                    color: Colors.white70, fontSize: 12),
+                style: const TextStyle(color: Colors.white70, fontSize: 12),
               ),
             ),
           )
@@ -2142,7 +2326,7 @@ class _MapPageState extends State<MapPage> {
             ? Colors.purple
             : isDeleting
                 ? Colors.red
-                : isStamping
+                : (isStamping || isStamp2Pt)
                     ? Colors.teal
                     : Colors.blue,
     foregroundColor: Colors.white,
@@ -2163,10 +2347,31 @@ class _MapPageState extends State<MapPage> {
         icon      : const Icon(Icons.layers),
         tooltip   : '地図切替',
         onSelected: (v) => setState(() => currentTile = v),
-        itemBuilder: (_) => const [
-          PopupMenuItem(value: 'osm',       child: Text('OpenStreetMap')),
-          PopupMenuItem(value: 'gsi_photo', child: Text('航空写真')),
-        ],
+        itemBuilder: (_) => _kTileLabels.entries
+            .map((e) => PopupMenuItem(
+                  value: e.key,
+                  child: Row(
+                    children: [
+                      Icon(
+                        e.key == 'osm' ? Icons.map : Icons.satellite_alt,
+                        size: 18,
+                        color: currentTile == e.key
+                            ? Theme.of(context).colorScheme.primary
+                            : null,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        e.value,
+                        style: TextStyle(
+                          fontWeight: currentTile == e.key
+                              ? FontWeight.bold
+                              : FontWeight.normal,
+                        ),
+                      ),
+                    ],
+                  ),
+                ))
+            .toList(),
       ),
       // メニュー（ドロワー）
       IconButton(
@@ -2181,7 +2386,7 @@ class _MapPageState extends State<MapPage> {
     children: [
       _buildMap(),
       // モード中の操作ガイド（画面上部に薄く表示）
-      if (isAddingNew || isCutting || isDeleting || isStamping)
+      if (isAddingNew || isCutting || isDeleting || isStamping || isStamp2Pt)
         Positioned(
           top  : 0,
           left : 0,
@@ -2191,7 +2396,7 @@ class _MapPageState extends State<MapPage> {
                     ? Colors.orange
                     : isCutting
                         ? Colors.purple
-                        : isStamping
+                        : (isStamping || isStamp2Pt)
                             ? Colors.teal
                             : Colors.red)
                 .withValues(alpha: 0.85),
@@ -2203,7 +2408,11 @@ class _MapPageState extends State<MapPage> {
                       ? 'ラインをタップして切断'
                       : isStamping
                           ? '矢印スタンプを配置したい場所をタップ'
-                          : '削除したいラインをタップ',
+                          : isStamp2Pt
+                              ? (_stamp2PtFirst == null
+                                  ? '① 始点（流向の上流側）をタップ'
+                                  : '② 終点（流向の下流側）をタップ → 角度を自動計算します')
+                              : '削除したいラインをタップ',
               textAlign: TextAlign.center,
               style: const TextStyle(color: Colors.white, fontSize: 13),
             ),
@@ -2242,10 +2451,9 @@ class _MapPageState extends State<MapPage> {
       TileLayer(
         urlTemplate        : _kTileUrls[currentTile] ?? _kTileUrls['osm']!,
         userAgentPackageName: 'com.example.sideGutter_map',
-        // 航空写真（GSI seamlessphoto）はネイティブズーム上限が18。
-        // maxNativeZoom を指定しておくと、それ以上ズームしても
-        // ズーム18のタイルを拡大表示するため「白紙」にならない。
-        maxNativeZoom: currentTile == 'gsi_photo' ? 18 : 19,
+        // タイル種別ごとのネイティブズーム上限を設定。
+        // これを超えた場合は上限タイルを拡大表示するため画面が白くならない。
+        maxNativeZoom: _kTileMaxNativeZoom[currentTile] ?? 19,
         maxZoom      : 22,
       ),
       ...layers.where((l) => l.visible).map(
@@ -2429,13 +2637,24 @@ class _MapPageState extends State<MapPage> {
         ),
         const SizedBox(height: 6),
 
-        // 矢印スタンプモード
+        // 矢印スタンプモード（1点）
         _roundFab(
           icon     : Icons.navigation,
-          tooltip  : '矢印スタンプ',
+          tooltip  : '矢印スタンプ（1点）',
           onTap    : _toggleStampMode,
           color    : isStamping ? Colors.teal : Colors.white,
           iconColor: isStamping ? Colors.white : Colors.teal,
+          mini     : true,
+        ),
+        const SizedBox(height: 6),
+
+        // 矢印スタンプモード（2点指定・勾配付き）
+        _roundFab(
+          icon     : Icons.straighten,
+          tooltip  : '2点指定スタンプ（勾配付き）',
+          onTap    : _toggleStamp2PtMode,
+          color    : isStamp2Pt ? Colors.teal.shade700 : Colors.white,
+          iconColor: isStamp2Pt ? Colors.white : Colors.teal.shade700,
           mini     : true,
         ),
         const SizedBox(height: 6),
@@ -2535,74 +2754,87 @@ class _MapPageState extends State<MapPage> {
     double tempAngle = stamp.angleDeg;
     Color  tempColor = stamp.color;
     final memoCtrl   = TextEditingController(text: stamp.memo);
+    final gradCtrl   = TextEditingController(text: stamp.gradient);
 
     showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (context, setS) => AlertDialog(
           title  : Text('スタンプ編集 - ${stamp.id}'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text('向き（北=0°、時計回り）', style: TextStyle(fontSize: 13)),
-              Row(
-                children: [
-                  Expanded(
-                    child: Slider(
-                      value    : tempAngle,
-                      min      : 0,
-                      max      : 359,
-                      divisions: 71,
-                      label    : '${tempAngle.toStringAsFixed(0)}°',
-                      onChanged: (v) => setS(() => tempAngle = v),
-                    ),
-                  ),
-                  SizedBox(
-                    width: 50,
-                    child: Text('${tempAngle.toStringAsFixed(0)}°',
-                        textAlign: TextAlign.center),
-                  ),
-                ],
-              ),
-              SizedBox(
-                width: 80, height: 80,
-                child: CustomPaint(
-                  painter: _ArrowPreviewPainter(angleDeg: tempAngle, color: tempColor),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 6,
-                children: [
-                  Colors.red, Colors.blue, Colors.green,
-                  Colors.orange, Colors.purple, Colors.black,
-                ].map((c) => GestureDetector(
-                  onTap: () => setS(() => tempColor = c),
-                  child: Container(
-                    width: 36, height: 36,
-                    decoration: BoxDecoration(
-                      color : c, shape: BoxShape.circle,
-                      border: Border.all(
-                        color: tempColor == c ? Colors.black : Colors.transparent,
-                        width: 3,
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('向き（北=0°、時計回り）', style: TextStyle(fontSize: 13)),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Slider(
+                        value    : tempAngle,
+                        min      : 0,
+                        max      : 359,
+                        divisions: 71,
+                        label    : '${tempAngle.toStringAsFixed(0)}°',
+                        onChanged: (v) => setS(() => tempAngle = v),
                       ),
                     ),
-                  ),
-                )).toList(),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: memoCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'メモ', border: OutlineInputBorder(), isDense: true,
+                    SizedBox(
+                      width: 50,
+                      child: Text('${tempAngle.toStringAsFixed(0)}°',
+                          textAlign: TextAlign.center),
+                    ),
+                  ],
                 ),
-              ),
-            ],
+                SizedBox(
+                  width: 80, height: 80,
+                  child: CustomPaint(
+                    painter: _ArrowPreviewPainter(angleDeg: tempAngle, color: tempColor),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 6,
+                  children: [
+                    Colors.red, Colors.blue, Colors.green,
+                    Colors.orange, Colors.purple, Colors.black,
+                  ].map((c) => GestureDetector(
+                    onTap: () => setS(() => tempColor = c),
+                    child: Container(
+                      width: 36, height: 36,
+                      decoration: BoxDecoration(
+                        color : c, shape: BoxShape.circle,
+                        border: Border.all(
+                          color: tempColor == c ? Colors.black : Colors.transparent,
+                          width: 3,
+                        ),
+                      ),
+                    ),
+                  )).toList(),
+                ),
+                const SizedBox(height: 8),
+                // 勾配表示・編集
+                TextField(
+                  controller: gradCtrl,
+                  decoration: const InputDecoration(
+                    labelText: '勾配（例: 1/200）',
+                    border   : OutlineInputBorder(),
+                    isDense  : true,
+                    hintText : '1/200',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: memoCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'メモ', border: OutlineInputBorder(), isDense: true,
+                  ),
+                ),
+              ],
+            ),
           ),
           actions: [
             TextButton(
               onPressed: () {
-                // 削除
                 _saveStateForUndo();
                 setState(() => layer.stamps.remove(stamp));
                 _saveToLocalStorage();
@@ -2623,6 +2855,7 @@ class _MapPageState extends State<MapPage> {
                   stamp.angleDeg = tempAngle;
                   stamp.color    = tempColor;
                   stamp.memo     = memoCtrl.text.trim();
+                  stamp.gradient = gradCtrl.text.trim();
                 });
                 _saveToLocalStorage();
                 Navigator.pop(ctx);
