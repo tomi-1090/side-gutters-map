@@ -1,6 +1,5 @@
-// api/uploadGeoJsonToBlob.js
+// api/uploadToBlob.js
 import { put } from '@vercel/blob';
-import { v4 as uuidv4 } from 'uuid'; // npm install uuid
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -18,31 +17,33 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { geojson, shareId: rawShareId } = req.body ?? {};
+    const { geojson, shareId: rawShareId } = req.body || {};
     if (!geojson) {
-      return res.status(400).json({ error: 'No geojson provided' });
+      return res.status(400).json({ error: 'No geojson data' });
     }
 
-    const shareId = (rawShareId ?? uuidv4()).replace(/[^a-zA-Z0-9-]/g, '');
+    const shareId = (rawShareId || Date.now().toString())
+      .replace(/[^a-zA-Z0-9-]/g, '');
+
     const filename = `shared/${shareId}.geojson`;
 
     const blob = await put(filename, JSON.stringify(geojson), {
-      access: 'public',           // 公開
-      addRandomSuffix: false,     // 同じshareIdで上書きしたい場合
-      cacheControlMaxAge: 0,      // キャッシュを最小に（即時反映重視）
+      access: 'public',
+      addRandomSuffix: false,
+      cacheControlMaxAge: 0,
     });
 
-    const shareUrl = `${window.location.origin}/?geojson=${encodeURIComponent(blob.url)}`;
+    const shareUrl = `${req.headers.origin || 'https://your-project.vercel.app'}/?geojson=${encodeURIComponent(blob.url)}`;
 
     return res.status(200).json({
       success: true,
-      rawUrl: blob.url,           // これを保存・共有に使用
-      shareUrl,
-      shareId,
+      rawUrl: blob.url,
+      shareUrl: shareUrl,
+      shareId: shareId,
     });
 
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: err.message });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ error: error.message });
   }
 }
