@@ -648,7 +648,8 @@ class _MapPageState extends State<MapPage> {
         return;
       }
 
-      final layerName = 'レイヤー ${layers.length + 1} - ${file.name}';
+      // ⑤ ファイル名のみをレイヤー名に使用（"レイヤーN -" プレフィックスを廃止）
+      final layerName = file.name.replaceAll(RegExp(r'\.(geojson|json)$', caseSensitive: false), '');
       _addParsedLayer(gutters, layerName);
       _showSnackBar('${gutters.length}件を「$layerName」に追加しました');
 
@@ -1271,6 +1272,9 @@ class _MapPageState extends State<MapPage> {
       angleDeg: angleDeg,
     );
 
+    // ★ 矢印1本追加ごとにUndo状態を記録（③ 1工程ずつ戻れるように）
+    _saveStateForUndo();
+
     setState(() {
       _currentLayer!.stamps.add(stamp);
     });
@@ -1691,14 +1695,46 @@ class _MapPageState extends State<MapPage> {
   }
 
   void _createEmptyLayer() {
-    setState(() {
-      layers.add(GutterLayer(
-        id     : DateTime.now().millisecondsSinceEpoch.toString(),
-        name   : '新規レイヤー ${layers.length + 1}',
-        gutters: [],
-      ));
-    });
-    _saveToLocalStorage();
+    final ctrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title  : const Text('新規レイヤー作成'),
+        content: TextField(
+          controller : ctrl,
+          autofocus  : true,
+          decoration : const InputDecoration(
+            labelText: 'レイヤー名',
+            hintText : '例）区域A・幹線など',
+            border   : OutlineInputBorder(),
+            isDense  : true,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child    : const Text('キャンセル'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final name = ctrl.text.trim();
+              if (name.isEmpty) return; // 空欄は受け付けない
+              setState(() {
+                layers.add(GutterLayer(
+                  id     : DateTime.now().millisecondsSinceEpoch.toString(),
+                  name   : name,
+                  gutters: [],
+                ));
+              });
+              _saveToLocalStorage();
+              Navigator.pop(ctx);          // ダイアログを閉じる
+              Navigator.of(context).maybePop(); // ドロワーを閉じる（開いていれば）
+            },
+            child: const Text('作成'),
+          ),
+        ],
+      ),
+    );
   }
 
   // ================================================================
@@ -1949,6 +1985,8 @@ class _MapPageState extends State<MapPage> {
     double bulkArrowSize = layer.gutters.first.arrowSize;
     bool   bulkShowHead  = layer.gutters.first.showHeadMark;
     double bulkHeadSize  = layer.gutters.first.headMarkSize;
+    // ④ 一括色：null = 変更しない
+    Color? bulkColor;
 
     showDialog(
       context: context,
@@ -1960,6 +1998,67 @@ class _MapPageState extends State<MapPage> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // ── 一括色変更（カテゴリ無効時に有効）────────────────
+                const Text('一括色変更',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                const SizedBox(height: 4),
+                if (layer.categoryKey != null)
+                  Container(
+                    padding   : const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color       : Colors.amber.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                      border      : Border.all(color: Colors.amber.shade300),
+                    ),
+                    child: const Text(
+                      'カテゴリ色分けが有効のため、個別色は表示に影響しません。\n'
+                      '色変更を反映するにはカテゴリ色分けを無効にしてください。',
+                      style: TextStyle(fontSize: 11, color: Colors.brown),
+                    ),
+                  ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    // 「変更しない」選択肢
+                    GestureDetector(
+                      onTap: () => setS(() => bulkColor = null),
+                      child: Container(
+                        width : 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color : Colors.grey.shade200,
+                          shape : BoxShape.circle,
+                          border: Border.all(
+                            color: bulkColor == null ? Colors.black : Colors.transparent,
+                            width: 3,
+                          ),
+                        ),
+                        child: const Icon(Icons.block, size: 18, color: Colors.grey),
+                      ),
+                    ),
+                    ..._kColorPalette.map((c) => GestureDetector(
+                      onTap : () => setS(() => bulkColor = c),
+                      child : Container(
+                        width : 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color : c,
+                          shape : BoxShape.circle,
+                          border: Border.all(
+                            color: bulkColor?.toARGB32() == c.toARGB32()
+                                ? Colors.black
+                                : Colors.transparent,
+                            width: 3,
+                          ),
+                        ),
+                      ),
+                    )),
+                  ],
+                ),
+                const Divider(height: 20),
+
                 // ── 線の太さ ──────────────────────────────────────
                 const Text('線の太さ', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
                 Row(
@@ -2060,6 +2159,7 @@ class _MapPageState extends State<MapPage> {
                 _saveStateForUndo();
                 setState(() {
                   for (final g in layer.gutters) {
+                    if (bulkColor != null) g.color = bulkColor!;
                     g.strokeWidth  = bulkStroke;
                     g.showArrow    = bulkShowArrow;
                     g.arrowSize    = bulkArrowSize;
@@ -2439,47 +2539,221 @@ class _MapPageState extends State<MapPage> {
       ..._createHeadMarkPolylines().map(
         (p) => PolylineLayer(polylines: [p]),
       ),
-      // === 流向矢印（→）描画 ===
+      // === 流向矢印スタンプ（→）描画 ===
       MarkerLayer(
         markers: [
           for (final layer in layers)
             if (layer.visible)
               for (final stamp in layer.stamps)
-                Marker(
-                  point: stamp.position,
-                  width: 45,
-                  height: 45,
-                  child: Transform.rotate(
-                    // angleDeg は北0°時計回りの方位角。
-                    // Flutter の Transform.rotate は数学座標（右0°・反時計回り正）。
-                    // '→' テキストは右向き（東＝方位90°）を基準とするため、
-                    // (angleDeg - 90) を ラジアンに変換して渡す。
-                    angle: (stamp.angleDeg - 90) * math.pi / 180,
-                    child: const Text(
-                      '→',
-                      style: TextStyle(
-                        fontSize: 36,
-                        color: Colors.green,
-                        fontWeight: FontWeight.bold,
-                        shadows: [
-                          Shadow(
-                            color: Colors.black38,
-                            blurRadius: 4,
-                            offset: Offset(1, 1),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
+                _buildStampMarker(stamp, layer),
         ],
       ),
     ],
   );
 
   // ================================================================
-  // 選択中レイヤーバッジ（左下常時表示）
+  // 流向矢印スタンプ Marker 生成（ズーム連動 + タップ編集）
   // ================================================================
+
+  /// ズームに応じたスタンプ矢印のフォントサイズを返す。
+  /// 流向矢印より少し小さめ（baseZoom17 で 24px 相当）。
+  double _scaledStampFontSize() {
+    const baseZoom      = 17.0;
+    const baseFontSize  = 24.0; // 基準サイズ（流向矢印の36より小さめ）
+    final scale = math.pow(2.0, (_currentZoom - baseZoom) * 0.5).toDouble();
+    return (baseFontSize * scale).clamp(8.0, baseFontSize * 6);
+  }
+
+  Marker _buildStampMarker(ArrowStamp stamp, GutterLayer layer) {
+    final fontSize   = _scaledStampFontSize();
+    final markerSize = fontSize + 12; // パディング分を加算
+
+    return Marker(
+      point : stamp.position,
+      width : markerSize,
+      height: markerSize,
+      child : GestureDetector(
+        onTap: () => _showStampEditSheet(stamp, layer),
+        child: Transform.rotate(
+          // angleDeg は北0°時計回りの方位角。
+          // '→' テキストは右向き（東＝方位90°）を基準とするため、
+          // (angleDeg - 90) をラジアンに変換して渡す。
+          angle: (stamp.angleDeg - 90) * math.pi / 180,
+          child: Text(
+            '→',
+            style: TextStyle(
+              fontSize  : fontSize,
+              color     : Colors.green,
+              fontWeight: FontWeight.bold,
+              shadows   : const [
+                Shadow(
+                  color     : Colors.black38,
+                  blurRadius: 4,
+                  offset    : Offset(1, 1),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ================================================================
+  // ② 矢印スタンプ編集ボトムシート（角度調整・削除）
+  // ================================================================
+
+  void _showStampEditSheet(ArrowStamp stamp, GutterLayer layer) {
+    double tempAngle = stamp.angleDeg;
+
+    showModalBottomSheet(
+      context           : context,
+      isScrollControlled: true,
+      useRootNavigator  : true,
+      backgroundColor   : Colors.white,
+      shape             : const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setS) => Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(context).viewInsets.bottom,
+          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 4, 20, 32),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // ドラッグハンドル
+                Center(
+                  child: Container(
+                    width : 40,
+                    height: 4,
+                    margin: const EdgeInsets.symmetric(vertical: 10),
+                    decoration: BoxDecoration(
+                      color       : Colors.grey.shade300,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '流向矢印の編集',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                    ),
+                    IconButton(
+                      icon     : const Icon(Icons.close),
+                      onPressed: () => Navigator.pop(ctx),
+                    ),
+                  ],
+                ),
+                const Divider(height: 16),
+
+                // 角度表示
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('角度（北=0°・時計回り）',
+                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                    Text('${tempAngle.toStringAsFixed(1)}°',
+                        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                  ],
+                ),
+                Slider(
+                  value    : tempAngle,
+                  min      : 0,
+                  max      : 360,
+                  divisions: 360,
+                  label    : '${tempAngle.toStringAsFixed(0)}°',
+                  onChanged: (v) => setS(() => tempAngle = v),
+                ),
+
+                // 方位の簡易ガイド
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  children: [
+                    _dirButton('北\n0°',   0,   tempAngle, (v) => setS(() => tempAngle = v)),
+                    _dirButton('東\n90°',  90,  tempAngle, (v) => setS(() => tempAngle = v)),
+                    _dirButton('南\n180°', 180, tempAngle, (v) => setS(() => tempAngle = v)),
+                    _dirButton('西\n270°', 270, tempAngle, (v) => setS(() => tempAngle = v)),
+                  ],
+                ),
+                const SizedBox(height: 20),
+
+                // ボタン行
+                Row(
+                  children: [
+                    // 削除ボタン
+                    OutlinedButton.icon(
+                      icon : const Icon(Icons.delete_outline, color: Colors.red),
+                      label: const Text('削除', style: TextStyle(color: Colors.red)),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: Colors.red),
+                      ),
+                      onPressed: () {
+                        _saveStateForUndo();
+                        setState(() => layer.stamps.remove(stamp));
+                        _saveToLocalStorage();
+                        Navigator.pop(ctx);
+                        _showSnackBar('矢印を削除しました');
+                      },
+                    ),
+                    const Spacer(),
+                    OutlinedButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child    : const Text('キャンセル'),
+                    ),
+                    const SizedBox(width: 8),
+                    FilledButton(
+                      onPressed: () {
+                        _saveStateForUndo();
+                        setState(() => stamp.angleDeg = tempAngle);
+                        _saveToLocalStorage();
+                        Navigator.pop(ctx);
+                        _showSnackBar('矢印の角度を更新しました');
+                      },
+                      child: const Text('保存'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 方位クイック選択ボタン
+  Widget _dirButton(String label, double angle, double current, ValueChanged<double> onTap) =>
+      GestureDetector(
+        onTap: () => onTap(angle),
+        child: Container(
+          padding   : const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color       : (current - angle).abs() < 1
+                ? Colors.teal.shade700
+                : Colors.grey.shade100,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Text(
+            label,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize  : 11,
+              fontWeight: FontWeight.bold,
+              color     : (current - angle).abs() < 1 ? Colors.white : Colors.black87,
+            ),
+          ),
+        ),
+      );
+
+
 
   Widget _buildLayerBadge() {
     final layer = _currentLayer;
@@ -2838,8 +3112,9 @@ class _MapPageState extends State<MapPage> {
             leading: const Icon(Icons.add_circle_outline),
             title  : const Text('新しい空レイヤー作成'),
             onTap  : () {
+              // ドロワーを閉じてからダイアログを出すと context が破棄されるため
+              // ドロワーを閉じずにダイアログを先に出す
               _createEmptyLayer();
-              Navigator.pop(context);
             },
           ),
         ),
