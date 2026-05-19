@@ -834,13 +834,18 @@ class _MapPageState extends State<MapPage> {
   // モード切り替え
   // ================================================================
 
-  void _toggleAddMode() => setState(() {
+    void _toggleAddMode() => setState(() {
     isAddingNew = !isAddingNew;
+
     if (isAddingNew) {
+      // 他のモードをすべてオフ
       isCutting = false;
       isDeleting = false;
       isStamp2Pt = false;
       _stamp2PtFirst = null;
+      newPoints.clear();
+    } else {
+      // モード終了時もクリア
       newPoints.clear();
     }
   });
@@ -863,10 +868,12 @@ class _MapPageState extends State<MapPage> {
     }
   });
 
-  void _toggleStamp2PtMode() {
+    void _toggleStamp2PtMode() {
     setState(() {
       isStamp2Pt = !isStamp2Pt;
+
       if (isStamp2Pt) {
+        // 他のモードをすべてオフ
         isAddingNew = false;
         isCutting = false;
         isDeleting = false;
@@ -1179,17 +1186,16 @@ class _MapPageState extends State<MapPage> {
     }
   }
 
-    void _createFlowArrow(LatLng start, LatLng end) {
+      void _createFlowArrow(LatLng start, LatLng end) {
     if (_currentLayer == null) {
       _showSnackBar('レイヤーが選択されていません');
       return;
     }
 
-    // === 角度計算修正（北=0°、時計回り、正しい方向）===
-    final dx = end.longitude - start.longitude;   // 東方向成分
-    final dy = end.latitude - start.latitude;     // 北方向成分（緯度増加=北）
-    
-    // atan2(東, 北) で北を0°、時計回りに角度を計算
+    // === 矢印方向修正 ===
+    final dx = end.longitude - start.longitude;   // 東方向
+    final dy = start.latitude - end.latitude;     // 北方向（進行方向）
+
     double angleDeg = math.atan2(dx, dy) * 180 / math.pi;
     if (angleDeg < 0) angleDeg += 360;
 
@@ -1210,7 +1216,7 @@ class _MapPageState extends State<MapPage> {
     });
 
     _saveToLocalStorage();
-    _showSnackBar('矢印を追加しました');
+    _showSnackBar('緑の流向矢印を追加しました');
   }
 
   // ================================================================
