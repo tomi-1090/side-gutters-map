@@ -1156,10 +1156,10 @@ class _MapPageState extends State<MapPage> {
                 ));
                 _newGutterCounter++;
                 newPoints.clear();
-                isAddingNew = false;
+                // isAddingNew = false; // モードを維持して続けて追加できるようにする
               });
               _saveToLocalStorage();
-              _showSnackBar('「${layer.name}」に追加しました');
+              _showSnackBar('「${layer.name}」に追加しました。続けてタップで次の路線を追加できます。');
               Navigator.pop(ctx);
             },
             child: const Text('保存'),
@@ -1181,7 +1181,7 @@ class _MapPageState extends State<MapPage> {
       _createFlowArrow(_stamp2PtFirst!, point);
       setState(() {
         _stamp2PtFirst = null;
-        isStamp2Pt = false;
+        // isStamp2Pt = false; // モードを維持して続けて追加できるようにする
       });
     }
   }
@@ -2215,7 +2215,11 @@ class _MapPageState extends State<MapPage> {
                   width: 45,
                   height: 45,
                   child: Transform.rotate(
-                    angle: stamp.angleDeg * math.pi / 180,
+                    // angleDeg は北0°時計回りの方位角。
+                    // Flutter の Transform.rotate は数学座標（右0°・反時計回り正）。
+                    // '→' テキストは右向き（東＝方位90°）を基準とするため、
+                    // (angleDeg - 90) を ラジアンに変換して渡す。
+                    angle: (stamp.angleDeg - 90) * math.pi / 180,
                     child: const Text(
                       '→',
                       style: TextStyle(
@@ -2603,4 +2607,3 @@ class _MapPageState extends State<MapPage> {
     ),
   );
 }
-
