@@ -411,14 +411,20 @@ class _MapPageState extends State<MapPage> {
   // GeoJSON パース
   // ================================================================
 
+  /// GeoJSON features からラインデータ（Gutter）を抽出。
+  /// Pointフィーチャーはスキップ（ArrowStamp として別途 _parseArrowStampFeatures で処理）。
   List<Gutter> _parseGeoJsonFeatures(List<dynamic> features) {
     final result = <Gutter>[];
     for (final f in features) {
       final geometry = f['geometry'];
       if (geometry == null) continue;
 
+      // Pointフィーチャーは ArrowStamp 用なのでスキップ
+      final geoType = geometry['type'] as String?;
+      if (geoType == 'Point') continue;
+
       final List<dynamic> coords;
-      switch (geometry['type'] as String?) {
+      switch (geoType) {
         case 'LineString':
           coords = geometry['coordinates'] as List<dynamic>;
         case 'MultiLineString':
@@ -468,13 +474,42 @@ class _MapPageState extends State<MapPage> {
     return result;
   }
 
+  /// GeoJSON features から勾配矢印スタンプ（Point型・type=='arrow_stamp'）を抽出。
+  List<ArrowStamp> _parseArrowStampFeatures(List<dynamic> features) {
+    final result = <ArrowStamp>[];
+    for (final f in features) {
+      final geometry = f['geometry'];
+      if (geometry == null) continue;
+      if (geometry['type'] != 'Point') continue;
+
+      final props = f['properties'] as Map<String, dynamic>? ?? {};
+      if (props['type']?.toString() != 'arrow_stamp') continue;
+
+      final coords = geometry['coordinates'] as List<dynamic>;
+      if (coords.length < 2) continue;
+
+      result.add(ArrowStamp(
+        id       : props['id']?.toString() ?? 'AR${DateTime.now().millisecondsSinceEpoch}',
+        position : LatLng((coords[1] as num).toDouble(), (coords[0] as num).toDouble()),
+        angleDeg : (props['angleDeg'] as num?)?.toDouble() ?? 0.0,
+      ));
+    }
+    return result;
+  }
+
   void _addParsedLayer(List<Gutter> gutters, String name) {
+    _addParsedLayerWithStamps(gutters, [], name);
+  }
+
+  void _addParsedLayerWithStamps(
+      List<Gutter> gutters, List<ArrowStamp> stamps, String name) {
     if (gutters.isEmpty) return;
     setState(() {
       layers.add(GutterLayer(
         id     : DateTime.now().millisecondsSinceEpoch.toString(),
         name   : name,
         gutters: gutters,
+        stamps : stamps,
       ));
     });
     _showAllGutters();
@@ -515,8 +550,10 @@ class _MapPageState extends State<MapPage> {
                     ?.containsKey('layer') == true);
 
         if (hasLayerMeta) {
-          final layerMap = <String, List<dynamic>>{};
-          final layerNames = <String, String>{};
+          // レイヤーごとにfeatureを振り分け（ラインとスタンプ両方）
+          final layerMap      = <String, List<dynamic>>{};
+          final layerNames    = <String, String>{};
+          final stampLayerMap = <String, List<dynamic>>{};
 
           for (final f in features) {
             final props   = f['properties'] as Map<String, dynamic>? ?? {};
@@ -524,7 +561,14 @@ class _MapPageState extends State<MapPage> {
                 props['layer']?.toString() ?? 'default';
             final layerName = props['layer']?.toString() ?? '共有データ';
 
-            layerMap.putIfAbsent(layerId, () => []).add(f);
+            // ArrowStampはスタンプマップへ、それ以外はラインマップへ
+            final isStamp = (f['geometry']?['type'] == 'Point') &&
+                (props['type']?.toString() == 'arrow_stamp');
+            if (isStamp) {
+              stampLayerMap.putIfAbsent(layerId, () => []).add(f);
+            } else {
+              layerMap.putIfAbsent(layerId, () => []).add(f);
+            }
             layerNames[layerId] = layerName;
           }
 
@@ -539,10 +583,15 @@ class _MapPageState extends State<MapPage> {
               final gutters = _parseGeoJsonFeatures(entry.value);
               if (gutters.isEmpty) continue;
               total += gutters.length;
+              // 同レイヤーのArrowStampも復元
+              final stamps = _parseArrowStampFeatures(
+                stampLayerMap[entry.key] ?? [],
+              );
               layers.add(GutterLayer(
-                id: entry.key,
-                name: layerNames[entry.key] ?? '共有データ',
+                id     : entry.key,
+                name   : layerNames[entry.key] ?? '共有データ',
                 gutters: gutters,
+                stamps : stamps,
               ));
             }
           });
@@ -565,7 +614,9 @@ class _MapPageState extends State<MapPage> {
           ? '共有データ ${DateTime.now().toIso8601String().substring(0, 10)}'
           : 'URL読み込み ${layers.length + 1}';
 
-      _addParsedLayer(gutters, label);
+      // ArrowStampも復元
+      final stamps = _parseArrowStampFeatures(features);
+      _addParsedLayerWithStamps(gutters, stamps, label);
       if (isShared) await _saveToLocalStorage();
       _showSnackBar('${gutters.length}本の側溝を読み込みました');
 
@@ -1470,6 +1521,13 @@ class _MapPageState extends State<MapPage> {
                               if (!ctx.mounted) return;
                               Navigator.pop(ctx);
                               if (!mounted) return;
+                              // 🍋 イースターエッグ：「檸檬爆弾」で梶井基次郎『檸檬』を開く
+                              if (g.memo.contains('檸檬爆弾')) {
+                                web.window.open(
+                                  'https://www.aozora.gr.jp/cards/000074/files/424_19826.html',
+                                  '_blank',
+                                );
+                              }
                               _showSnackBar('保存しました（勾配: ${g.gradientLabel}）');
                             },
                             child: const Text('保存'),
