@@ -835,12 +835,14 @@ class _MapPageState extends State<MapPage> {
   // ================================================================
 
   void _toggleAddMode() => setState(() {
-    isAddingNew   = !isAddingNew;
-    isCutting     = false;
-    isDeleting    = false;
-    isStamp2Pt    = false;
-    _stamp2PtFirst = null;
-    newPoints.clear();
+    isAddingNew = !isAddingNew;
+    if (isAddingNew) {
+      isCutting = false;
+      isDeleting = false;
+      isStamp2Pt = false;
+      _stamp2PtFirst = null;
+      newPoints.clear();
+    }
   });
 
   void _toggleCutMode() => setState(() {
@@ -852,11 +854,13 @@ class _MapPageState extends State<MapPage> {
   });
 
   void _toggleDeleteMode() => setState(() {
-    isDeleting     = !isDeleting;
-    isAddingNew    = false;
-    isCutting      = false;
-    isStamp2Pt     = false;
-    _stamp2PtFirst = null;
+    isDeleting = !isDeleting;
+    if (isDeleting) {
+      isAddingNew = false;
+      isCutting = false;
+      isStamp2Pt = false;
+      _stamp2PtFirst = null;
+    }
   });
 
   void _toggleStamp2PtMode() {
@@ -908,7 +912,7 @@ class _MapPageState extends State<MapPage> {
   // マップタップ処理
   // ================================================================
 
-  void _addPoint(TapPosition _, LatLng point) {
+    void _addPoint(TapPosition _, LatLng point) {
     final layer = _currentLayer;
     if (layer == null) {
       _showSnackBar('レイヤーがありません。先にGeoJSONを読み込んでください。');
@@ -935,11 +939,13 @@ class _MapPageState extends State<MapPage> {
       final snapped = _trySnap(point);
       if (snapped != null) {
         setState(() => newPoints.add(snapped));
-        _showSnackBar('端点にスナップしました');
       } else {
         setState(() => newPoints.add(point));
       }
-    } else if (isCutting) {
+      return;
+    }
+
+    if (isCutting) {
       _cutLineAtPoint(point, layer);
     } else {
       final nearest = _findNearestGutterInLayer(point, layer);
@@ -1173,16 +1179,18 @@ class _MapPageState extends State<MapPage> {
     }
   }
 
-  void _createFlowArrow(LatLng start, LatLng end) {
+    void _createFlowArrow(LatLng start, LatLng end) {
     if (_currentLayer == null) {
       _showSnackBar('レイヤーが選択されていません');
       return;
     }
 
-    // 角度計算（北を0°、時計回り）
-    final dx = end.longitude - start.longitude;
-    final dy = end.latitude - start.latitude;
-    double angleDeg = math.atan2(dx, -dy) * 180 / math.pi;
+    // === 角度計算修正（北=0°、時計回り、正しい方向）===
+    final dx = end.longitude - start.longitude;   // 東方向成分
+    final dy = end.latitude - start.latitude;     // 北方向成分（緯度増加=北）
+    
+    // atan2(東, 北) で北を0°、時計回りに角度を計算
+    double angleDeg = math.atan2(dx, dy) * 180 / math.pi;
     if (angleDeg < 0) angleDeg += 360;
 
     // 中間点に配置
@@ -1202,7 +1210,7 @@ class _MapPageState extends State<MapPage> {
     });
 
     _saveToLocalStorage();
-    _showSnackBar('緑の流向矢印を追加しました');
+    _showSnackBar('矢印を追加しました');
   }
 
   // ================================================================
