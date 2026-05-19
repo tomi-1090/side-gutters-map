@@ -27,8 +27,9 @@ export default async function handler(req, res) {
 
     const filename = `shared/${shareId}.geojson`;
 
+    // Private対応
     const blob = await put(filename, JSON.stringify(geojson), {
-      access: 'public',
+      access: 'private',           // ← Privateに変更
       addRandomSuffix: false,
       cacheControlMaxAge: 0,
     });
@@ -37,13 +38,13 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       success: true,
-      rawUrl: blob.url,
+      rawUrl: blob.url,        // これが署名付きURLになる
       shareUrl: shareUrl,
       shareId: shareId,
     });
 
   } catch (error) {
-    console.error(error);
+    console.error('[uploadToBlob]', error);
     return res.status(500).json({ error: error.message });
   }
 }
