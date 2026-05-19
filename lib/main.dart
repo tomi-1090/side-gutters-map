@@ -508,7 +508,6 @@ class _MapPageState extends State<MapPage> {
 
         _sharedGeoJsonUrl = rawUrl;   // token付きのまま保存
 
-        // 以降のレイヤー処理部分はそのまま...
         final hasLayerMeta = features.isNotEmpty &&
             ((features.first['properties'] as Map<String, dynamic>?)
                     ?.containsKey('layer') == true);
