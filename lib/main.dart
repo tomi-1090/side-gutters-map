@@ -478,17 +478,15 @@ class _MapPageState extends State<MapPage> {
     _showAllGutters();
   }
 
-   // ================================================================
-  // GeoJSON 読み込み（URL）→ Vercel Blob対応版
+  // ================================================================
+  // GeoJSON 読み込み（URL）→ Vercel Blob Private対応版
   // ================================================================
 
   Future<void> _loadFromUrl(String rawUrl, {bool isShared = false}) async {
-    final cleanUrl = rawUrl.contains('?') ? rawUrl.split('?').first : rawUrl;
-
     _showSnackBar(isShared ? '共有URLからデータを読み込み中...' : 'GeoJSONを読み込み中...');
 
     try {
-      // ★★★ Vercel BlobはCORS対応済みなので直接取得可能 ★★★
+      // ★★★ Private Blob対応：cleanUrlを作らない（トークンが必要） ★★★
       final response = await http.get(Uri.parse(rawUrl));
 
       if (response.statusCode != 200) {
@@ -499,17 +497,18 @@ class _MapPageState extends State<MapPage> {
       final features = data['features'] as List<dynamic>? ?? [];
 
       if (isShared) {
-        // shareIdを保存（後で再利用するため）
         try {
-          final shareId = Uri.parse(cleanUrl).pathSegments.last
+          // shareId抽出（token部分は無視）
+          final uri = Uri.parse(rawUrl);
+          final shareId = uri.pathSegments.last
               .replaceAll('.geojson', '')
               .replaceAll('shared/', '');
           web.window.localStorage.setItem(_kShareIdKey, shareId);
         } catch (_) {}
 
-        _sharedGeoJsonUrl = cleanUrl;
+        _sharedGeoJsonUrl = rawUrl;   // token付きのまま保存
 
-        // レイヤー情報付きかどうか判定
+        // 以降のレイヤー処理部分はそのまま...
         final hasLayerMeta = features.isNotEmpty &&
             ((features.first['properties'] as Map<String, dynamic>?)
                     ?.containsKey('layer') == true);
@@ -554,7 +553,7 @@ class _MapPageState extends State<MapPage> {
         }
       }
 
-      // layerMetaなしの場合（1レイヤーとして追加）
+      // layerMetaなしの場合
       final gutters = _parseGeoJsonFeatures(features);
       if (gutters.isEmpty) {
         _showSnackBar('有効なラインが見つかりませんでした');
