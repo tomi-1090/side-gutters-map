@@ -1767,34 +1767,19 @@ class _MapPageState extends State<MapPage> {
   /// 断面（shape）の入力有無でデフォルト色を返すヘルパー
   /// shape が '---' / 空 → 未入力 → グレー
   /// shape が入力済み   → 種別ごとの固定色
-  static Color _defaultShapeColor(Gutter g) {
-    final s = g.shape.trim();
-    if (s.isEmpty || s == '---') return Colors.grey.shade400; // 断面未入力
-    switch (s) {
-      case '開渠' : return Colors.blue;
-      case 'BOX'  : return Colors.orange;
-      case '円形' : return Colors.green;
-      default     : return Colors.purple;
-    }
-  }
-
   Color _getGutterColor(Gutter g, GutterLayer layer) {
+    // カテゴリ色分けが有効な場合はそちらを優先
     if (layer.categoryKey != null && layer.categoryColors.isNotEmpty) {
-      // propertiesから取得（categoryKeyが'shape'/'diameter'等の場合も対応）
       final raw   = g.properties[layer.categoryKey!];
-      final value = raw?.toString().trim() ?? '';
-      final key   = value.isEmpty ? '未分類' : value;
-      return layer.categoryColors[key] ??
+      final value = _normalizeShapeValue(raw?.toString().trim() ?? '');
+      return layer.categoryColors[value] ??
              layer.categoryColors['未分類'] ??
              Colors.grey;
     }
-    // カテゴリ設定なし → g.color が「変更済み」かどうかを properties で判断。
-    // properties に 'color' キーが存在しない（外部GeoJSON読込直後など）かつ
-    // g.color がデフォルトの青のままであれば、断面形状で自動色分けする。
-    // properties['color'] が存在する場合やカテゴリ解除後は g.color を尊重する。
+    // 明示的に色変更されていない外部GeoJSONデータは断面形状で自動色分け
     final hasExplicitColor = g.properties.containsKey('color');
     if (!hasExplicitColor && g.color.toARGB32() == Colors.blue.toARGB32()) {
-      return _defaultShapeColor(g);
+      return _shapeNameToColor(_normalizeShapeValue(g.shape.trim()));
     }
     return g.color;
   }
@@ -1828,49 +1813,14 @@ class _MapPageState extends State<MapPage> {
       }));
   }
 
-  List<String> _getUniqueValues(GutterLayer layer, String? key) {
-    if (key == null) return [];
-    final values = {
-      for (final g in layer.gutters)
-        // '---' や空文字は「未分類」に統一
-        () {
-          final v = g.properties[key]?.toString().trim() ?? '';
-          return (v.isEmpty || v == '---') ? '未分類' : v;
-        }(),
-    }.toList();
+  // ----------------------------------------------------------------
+  // カテゴリ色分けユーティリティ
+  // ----------------------------------------------------------------
 
-    // キーが 'layer'（レイヤー名）の場合はドロワーの layers リスト順に揃える。
-    // それ以外はアルファベット順。
-    if (key == 'layer') {
-      final layerOrder = {
-        for (int i = 0; i < layers.length; i++) layers[i].name: i,
-      };
-      values.sort((a, b) {
-        final ia = layerOrder[a] ?? layers.length; // 未登録は末尾
-        final ib = layerOrder[b] ?? layers.length;
-        if (ia != ib) return ia.compareTo(ib);
-        return a.compareTo(b); // 同順位なら名前順
-      });
-    } else {
-      values.sort();
-    }
-    return values;
-  }
+  /// shape 属性のデフォルトカテゴリ（値が未設定でも常に表示する固定4項目）。
+  static const _kShapeCategories = ['BOX', '円形', '未分類', '開渠'];
 
-  Map<String, Color> _generateCategoryColors(GutterLayer layer, String key) {
-    final values = _getUniqueValues(layer, key);
-    // 'shape' キーの場合は断面種別ごとの固定色を使う
-    if (key == 'shape' || key == '断面形状') {
-      return {
-        for (final v in values)
-          v: _shapeNameToColor(v),
-      };
-    }
-    final palette = [...Colors.primaries, Colors.brown, Colors.grey, Colors.pink, Colors.cyan];
-    return {for (int i = 0; i < values.length; i++) values[i]: palette[i % palette.length]};
-  }
-
-  /// shape値 → 色の固定マッピング
+  /// shape値 → 固定色マッピング（_defaultShapeColor と対応）
   static Color _shapeNameToColor(String shape) {
     switch (shape) {
       case '開渠'  : return Colors.blue;
@@ -1879,6 +1829,62 @@ class _MapPageState extends State<MapPage> {
       case '未分類': return Colors.grey.shade400;
       default      : return Colors.purple;
     }
+  }
+
+  /// [key] 属性の値一覧を返す。
+  /// - '---' / 空文字 → '未分類' に正規化
+  /// - shape キーは _kShapeCategories を固定ベースとして使い、
+  ///   データに存在する追加値も末尾に補完する
+  /// - 'layer' キーはレイヤー順、それ以外はアルファベット順
+  List<String> _getUniqueValues(GutterLayer layer, String? key) {
+    if (key == null) return [];
+
+    // データから収集した値（正規化済み）
+    final fromData = {
+      for (final g in layer.gutters)
+        _normalizeShapeValue(g.properties[key]?.toString().trim() ?? ''),
+    };
+
+    // shape キーは固定4項目をベースに、データ独自の追加値を末尾補完
+    if (_isShapeKey(key)) {
+      final extras = fromData.difference(_kShapeCategories.toSet())
+        ..remove('未分類');
+      final extraList = extras.toList()..sort();
+      return [..._kShapeCategories, ...extraList];
+    }
+
+    final values = fromData.toList();
+    if (key == 'layer') {
+      // レイヤー登録順にソート
+      final order = {for (int i = 0; i < layers.length; i++) layers[i].name: i};
+      values.sort((a, b) {
+        final ia = order[a] ?? layers.length;
+        final ib = order[b] ?? layers.length;
+        return ia != ib ? ia.compareTo(ib) : a.compareTo(b);
+      });
+    } else {
+      values.sort();
+    }
+    return values;
+  }
+
+  /// shape 関連キーかどうか
+  static bool _isShapeKey(String key) => key == 'shape' || key == '断面形状';
+
+  /// '---' / 空文字 → '未分類' に正規化
+  static String _normalizeShapeValue(String v) =>
+      (v.isEmpty || v == '---') ? '未分類' : v;
+
+  /// [key] 属性のカテゴリ → 初期色マッピングを生成する。
+  /// shape キーは _kShapeCategories 全項目の固定色を返すため、
+  /// データに値が1件も無くても4カテゴリが揃う。
+  Map<String, Color> _generateCategoryColors(GutterLayer layer, String key) {
+    final values = _getUniqueValues(layer, key);
+    if (_isShapeKey(key)) {
+      return {for (final v in values) v: _shapeNameToColor(v)};
+    }
+    final palette = [...Colors.primaries, Colors.brown, Colors.grey, Colors.pink, Colors.cyan];
+    return {for (int i = 0; i < values.length; i++) values[i]: palette[i % palette.length]};
   }
 
   void _showCategoryStylingDialog(int layerIndex) {
