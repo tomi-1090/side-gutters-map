@@ -73,6 +73,7 @@ const _kDiameterOptions = [
 
 const _kStorageKey = 'layers_data';
 const _kShareIdKey = 'share_id';
+const _kShareRawUrlKey = 'share_raw_url'; // Blob rawUrl（トークン付き）を保存
 
 // Undo履歴上限
 const _kUndoLimit = 20;
@@ -364,8 +365,16 @@ class _MapPageState extends State<MapPage> {
   Future<void> _init() async {
     final geojsonParam = Uri.base.queryParameters['geojson'] ?? '';
     if (geojsonParam.isNotEmpty) {
+      // URLパラメータがある場合はそこから読み込み、rawUrlも記憶
       await _loadFromUrl(Uri.decodeComponent(geojsonParam), isShared: true);
     } else {
+      // URLパラメータがない場合：rawUrlをlocalStorageから復元してデータ読み込み
+      try {
+        final savedRawUrl = web.window.localStorage.getItem(_kShareRawUrlKey) ?? '';
+        if (savedRawUrl.isNotEmpty) {
+          _sharedGeoJsonUrl = savedRawUrl;
+        }
+      } catch (_) {}
       await _loadFromLocalStorage();
     }
   }
@@ -543,6 +552,10 @@ class _MapPageState extends State<MapPage> {
         } catch (_) {}
 
         _sharedGeoJsonUrl = rawUrl;   // token付きのまま保存
+        // リロード後も復元できるようlocalStorageにも保持
+        try {
+          web.window.localStorage.setItem(_kShareRawUrlKey, rawUrl);
+        } catch (_) {}
 
         final hasLayerMeta = features.isNotEmpty &&
             ((features.first['properties'] as Map<String, dynamic>?)
@@ -769,9 +782,10 @@ class _MapPageState extends State<MapPage> {
       final rawUrl = data['rawUrl'] as String;
       _sharedGeoJsonUrl = rawUrl;
 
-      // localStorageにも保存
+      // localStorageにも保存（リロード後もアップロード先URLを維持するため）
       try {
         web.window.localStorage.setItem(_kShareIdKey, data['shareId'] as String? ?? shareId);
+        web.window.localStorage.setItem(_kShareRawUrlKey, rawUrl);
       } catch (_) {}
 
       final shareUrl = data['shareUrl'] as String? ??
@@ -2015,8 +2029,8 @@ class _MapPageState extends State<MapPage> {
                     normalized[nk] = v;
                   });
                   setState(() {
-                    layer.categoryKey    = selectedKey;
-                    layer.categoryColors = normalized;
+                    layers[layerIndex].categoryKey    = selectedKey;
+                    layers[layerIndex].categoryColors = normalized;
                   });
                   _saveToLocalStorage();
                   Navigator.pop(context);
@@ -2221,7 +2235,8 @@ class _MapPageState extends State<MapPage> {
               onPressed: () {
                 _saveStateForUndo();
                 setState(() {
-                  for (final g in layer.gutters) {
+                  final lyr = layers[layerIndex];
+                  for (final g in lyr.gutters) {
                     if (bulkColor != null) { g.color = bulkColor!; g.properties['color'] = bulkColor!.toARGB32(); }
                     g.strokeWidth  = bulkStroke;
                     g.showArrow    = bulkShowArrow;
@@ -2229,17 +2244,14 @@ class _MapPageState extends State<MapPage> {
                     g.showHeadMark = bulkShowHead;
                     g.headMarkSize = bulkHeadSize;
                   }
-                  // 色を一括指定した場合はカテゴリ色分けを解除する。
-                  // categoryKey が残っていると _getGutterColor がカテゴリ側を
-                  // 優先してしまい、g.color への変更が画面に反映されないため。
                   if (bulkColor != null) {
-                    layer.categoryKey    = null;
-                    layer.categoryColors = {};
+                    lyr.categoryKey    = null;
+                    lyr.categoryColors = {};
                   }
                 });
                 _saveToLocalStorage();
                 Navigator.pop(ctx);
-                _showSnackBar('${layer.gutters.length}本に一括適用しました');
+                _showSnackBar('${layers[layerIndex].gutters.length}本に一括適用しました');
               },
               child: const Text('一括適用'),
             ),
