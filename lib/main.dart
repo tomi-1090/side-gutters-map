@@ -36,20 +36,23 @@ class MyApp extends StatelessWidget {
 // 定数
 // ================================================================
 const _kTileUrls = {
-  'osm'       : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-  'google_photo': 'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
+  'osm'           : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+  'google_photo'  : 'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
+  'google_hybrid' : 'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
 };
 
 // タイル選択肢の表示ラベル
 const _kTileLabels = {
-  'osm'       : 'OpenStreetMap',
-  'google_photo': '航空写真（Google）',
+  'osm'           : 'OpenStreetMap',
+  'google_photo'  : '航空写真（Google）',
+  'google_hybrid' : 'ハイブリッド（Google）',
 };
 
 // タイルごとのネイティブズーム上限
 const _kTileMaxNativeZoom = {
-  'osm'       : 19,
-  'google_photo': 23,
+  'osm'           : 19,
+  'google_photo'  : 23,
+  'google_hybrid' : 23,
 };
 
 const _kColorPalette = [
@@ -338,7 +341,7 @@ class _MapPageState extends State<MapPage> {
   final List<String> _redoStack = [];
 
   int    _newGutterCounter = 1;
-  String currentTile       = 'osm';
+  String currentTile       = 'google_photo'; // ① デフォルトを航空写真に変更
   String? _sharedGeoJsonUrl;
 
   // ズームレベルに応じた線幅スケーリング用
@@ -697,19 +700,24 @@ class _MapPageState extends State<MapPage> {
   // GeoJSON アップロード（全レイヤー共有）→ Vercel Blob版
   // ================================================================
 
-  Future<void> _uploadAllLayers() async {
+  /// 共通アップロード処理。[forceNewId] が true なら必ず新しいIDを発行する。
+  Future<void> _uploadAllLayers({bool forceNewId = false}) async {
     if (layers.isEmpty) {
       _showSnackBar('アップロードするデータがありません');
       return;
     }
 
     try {
-      // shareIdの決定（既存があれば再利用）
+      // ③ shareId の決定
       String shareId;
-      if (_sharedGeoJsonUrl != null) {
+      if (forceNewId) {
+        // 新規URL発行：必ず新しいIDを生成（既存データは別URLのまま残る）
+        shareId = DateTime.now().millisecondsSinceEpoch.toString();
+      } else if (_sharedGeoJsonUrl != null) {
+        // 更新：現在の共有URLのIDを再利用
         shareId = Uri.parse(_sharedGeoJsonUrl!).pathSegments.last
             .replaceAll('.geojson', '')
-            .replaceAll('shared/', ''); // Blobの場合の余分なパス対策
+            .replaceAll('shared/', '');
       } else {
         try {
           shareId = web.window.localStorage.getItem(_kShareIdKey) ?? '';
@@ -755,7 +763,7 @@ class _MapPageState extends State<MapPage> {
         web.window.localStorage.setItem(_kShareIdKey, data['shareId'] as String? ?? shareId);
       } catch (_) {}
 
-      final shareUrl = data['shareUrl'] as String? ?? 
+      final shareUrl = data['shareUrl'] as String? ??
           '${web.window.location.origin}/?geojson=${Uri.encodeComponent(rawUrl)}';
 
       try {
@@ -764,8 +772,10 @@ class _MapPageState extends State<MapPage> {
 
       if (!mounted) return;
 
-      _showShareDialog(shareUrl);
-      _showSnackBar('✅ 即時アップロード完了！（${features.length}本）');
+      _showShareDialog(shareUrl, isNew: forceNewId);
+      _showSnackBar(forceNewId
+          ? '✅ 新規URL発行完了！（${features.length}本）'
+          : '✅ 即時アップロード完了！（${features.length}本）');
 
     } catch (e) {
       _showSnackBar('アップロード失敗: $e');
@@ -773,17 +783,30 @@ class _MapPageState extends State<MapPage> {
     }
   }
 
-  // ダイアログも少し修正（5分待つ必要がなくなったので）
-  void _showShareDialog(String shareUrl) {
+
+  // ダイアログ（新規URL発行かアップロード共有かで表示を切り替え）
+  void _showShareDialog(String shareUrl, {bool isNew = false}) {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text('共有URL生成完了'),
+        title: Text(isNew ? '新規URL発行完了' : '共有URL生成完了'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('✅ 即時反映されます！', style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold)),
+            Text(
+              isNew
+                  ? '✅ 新しい共有URLを発行しました！'
+                  : '✅ 即時反映されます！',
+              style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold),
+            ),
+            if (isNew) ...[
+              const SizedBox(height: 6),
+              const Text(
+                '※ 以前の共有URLとは別のURLです。',
+                style: TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+            ],
             const SizedBox(height: 12),
             const Text('クリップボードにコピー済みです。'),
             const SizedBox(height: 12),
@@ -2411,7 +2434,11 @@ class _MapPageState extends State<MapPage> {
                   child: Row(
                     children: [
                       Icon(
-                        e.key == 'osm' ? Icons.map : Icons.satellite_alt,
+                        e.key == 'osm'
+                            ? Icons.map
+                            : e.key == 'google_hybrid'
+                                ? Icons.map_outlined
+                                : Icons.satellite_alt,
                         size: 18,
                         color: currentTile == e.key
                             ? Theme.of(context).colorScheme.primary
@@ -2832,6 +2859,11 @@ class _MapPageState extends State<MapPage> {
             label  : 'アップロード共有',
             icon   : Icons.cloud_upload,
             onTap  : () { setState(() => _fabExpanded = false); _uploadAllLayers(); },
+          ),
+          _menuRow(
+            label  : '新規URL発行',
+            icon   : Icons.add_link,
+            onTap  : () { setState(() => _fabExpanded = false); _uploadAllLayers(forceNewId: true); },
           ),
           _menuRow(
             label  : 'Raw URL→共有URL',
