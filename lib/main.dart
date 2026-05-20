@@ -2206,24 +2206,46 @@ class _MapPageState extends State<MapPage> {
   // 流向矢印
   // ================================================================
 
-  List<Polygon> _createFlowArrowPolygons() => [
-    for (final layer in layers)
-      if (layer.visible)
-        for (final g in layer.gutters)
-          if (g.showArrow && g.points.length >= 2)
-            Polygon(
-              points           : _arrowheadPoints(
-                g.points[g.points.length - 2],
-                g.points.last,
-                sizeMeters: g.arrowSize,
-              ),
-              color            : _getGutterColor(g, layer),
-              borderColor      : Colors.white,
-              borderStrokeWidth: 1.5,
-            ),
-  ];
+  // ================================================================
+  // 流向矢印 – ＞型ポリライン（軽量化版）
+  // ================================================================
+  // 旧実装：Polygon（三角形）を 1本ごとに PolygonLayer へ追加
+  //   → 1000本時に PolygonLayer が1000個生成され重くなっていた。
+  //
+  // 新実装：すべての矢印を Polyline（V字2本線）として生成し、
+  //   呼び出し側で 1つの PolylineLayer にまとめて渡す。
+  //   ・Widgetが1本 → ポリゴン塗りつぶし演算も不要で大幅軽量化。
+  //   ・見た目は「＞」のシェブロン形状（角度・大きさは従来相当を維持）。
+  // ================================================================
 
-  List<LatLng> _arrowheadPoints(LatLng from, LatLng to, {double sizeMeters = 12.0}) {
+  List<Polyline> _createFlowArrowPolylines() {
+    final result = <Polyline>[];
+    for (final layer in layers) {
+      if (!layer.visible) continue;
+      for (final g in layer.gutters) {
+        if (!g.showArrow || g.points.length < 2) continue;
+        final color = _getGutterColor(g, layer);
+        final strokeW = math.max(1.0, _scaledStrokeWidth(g.strokeWidth * 0.55));
+        final segs = _arrowheadPolylinePoints(
+          g.points[g.points.length - 2],
+          g.points.last,
+          sizeMeters: g.arrowSize,
+        );
+        // ＞ 形状の2辺を1つの Polyline（折れ線）として追加
+        result.add(Polyline(
+          points     : segs,
+          color      : color,
+          strokeWidth: strokeW,
+        ));
+      }
+    }
+    return result;
+  }
+
+  /// 矢印先端の「＞」形状を表す3点リスト [左翼端, 先端, 右翼端] を返す。
+  /// 翼の開き角は従来ポリゴンと同じ 15° × 2 = 30°（halfWidth は tan15° で計算）。
+  List<LatLng> _arrowheadPolylinePoints(LatLng from, LatLng to,
+      {double sizeMeters = 12.0}) {
     final dy = to.latitude  - from.latitude;
     final dx = to.longitude - from.longitude;
 
@@ -2244,12 +2266,13 @@ class _MapPageState extends State<MapPage> {
     final bx = -ux * sizeMeters;
     final by = -uy * sizeMeters;
 
+    // 左翼端 → 先端 → 右翼端 の順（Polyline の折れ線で ＞ を表現）
     return [
+      LatLng(to.latitude  + (by + vy * halfWidth) / mPerDegLat,
+             to.longitude + (bx + vx * halfWidth) / mPerDegLon),
       to,
       LatLng(to.latitude  + (by - vy * halfWidth) / mPerDegLat,
              to.longitude + (bx - vx * halfWidth) / mPerDegLon),
-      LatLng(to.latitude  + (by + vy * halfWidth) / mPerDegLat,
-             to.longitude + (bx + vx * halfWidth) / mPerDegLon),
     ];
   }
 
@@ -2560,9 +2583,10 @@ class _MapPageState extends State<MapPage> {
                 strokeWidth: _scaledStrokeWidth(7.5)),
           ],
         ),
-      ..._createFlowArrowPolygons().map(
-        (p) => PolygonLayer(polygons: [p], polygonCulling: false),
-      ),
+      // 流向矢印（＞型ポリライン）を 1つの PolylineLayer にまとめて描画
+      // 旧実装では矢印1本ごとに PolygonLayer を生成していたが、
+      // 新実装では全矢印を1レイヤーにまとめることで大幅に軽量化。
+      PolylineLayer(polylines: _createFlowArrowPolylines()),
       ..._createHeadMarkPolylines().map(
         (p) => PolylineLayer(polylines: [p]),
       ),
