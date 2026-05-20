@@ -456,7 +456,7 @@ class _MapPageState extends State<MapPage> {
       mergedProps['memo']     = memo;
 
       result.add(Gutter(
-        id          : props['id']?.toString()   ?? 'SG-1',
+        id          : props['id']?.toString()   ?? 'SG-${DateTime.now().millisecondsSinceEpoch}-${result.length}',
         name        : props['name']?.toString() ?? '',
         shape       : shape,
         diameter    : diameter,
@@ -1029,7 +1029,11 @@ class _MapPageState extends State<MapPage> {
       final nearest = _findNearestGutterInLayer(point, layer);
       if (nearest != null) {
         _saveStateForUndo();
-        setState(() => layer.gutters.remove(nearest));
+        final targetId = nearest.id;
+        setState(() {
+          final idx = selectedLayerIndex ?? 0;
+          layers[idx].gutters.removeWhere((g) => g.id == targetId);
+        });
         _saveToLocalStorage();
         _showSnackBar('側溝を削除しました');
       }
@@ -1104,55 +1108,71 @@ class _MapPageState extends State<MapPage> {
       }
     }
 
+    // 切断前にデータをコピーしておく（setState内でlayerを引き直すため）
+    final layerIdx   = selectedLayerIndex ?? 0;
+    final gId        = g.id;
+    final gName      = g.name;
+    final gShape     = g.shape;
+    final gDiameter  = g.diameter;
+    final gMemo      = g.memo;
+    final gReversed  = g.flowReversed;
+    final gColor     = g.color;
+    final gArrow     = g.showArrow;
+    final gArrowSize = g.arrowSize;
+    final gStroke    = g.strokeWidth;
+    final gHeadMark  = g.showHeadMark;
+    final gHeadSize  = g.headMarkSize;
+    final gProps     = Map<String, dynamic>.from(g.properties);
+    final gElevStart = g.elevationStart;
+    final gElevEnd   = g.elevationEnd;
+
+    final List<LatLng> ptsA;
+    final List<LatLng> ptsB;
+    if (snapVertexIdx != null) {
+      ptsA = [...pts.sublist(0, snapVertexIdx + 1)];
+      ptsB = [...pts.sublist(snapVertexIdx)];
+    } else {
+      ptsA = [...pts.sublist(0, bestSeg + 1), cutPoint];
+      ptsB = [cutPoint, ...pts.sublist(bestSeg + 1)];
+    }
+
     _saveStateForUndo();
     setState(() {
-      layer.gutters.removeAt(bestIdx);
-
-      final List<LatLng> ptsA;
-      final List<LatLng> ptsB;
-      if (snapVertexIdx != null) {
-        // 折れ点ぴったりで切断 → 折れ点は両側に含める
-        ptsA = [...pts.sublist(0, snapVertexIdx + 1)];
-        ptsB = [...pts.sublist(snapVertexIdx)];
-      } else {
-        // 通常の射影点で切断
-        ptsA = [...pts.sublist(0, bestSeg + 1), cutPoint];
-        ptsB = [cutPoint, ...pts.sublist(bestSeg + 1)];
-      }
-
-      layer.gutters.add(Gutter(
-        id             : '${g.id}-A',
-        name           : '${g.name}-A',
-        shape          : g.shape,
-        diameter       : g.diameter,
-        memo           : g.memo,
-        flowReversed   : g.flowReversed,
-        color          : g.color,
-        showArrow      : g.showArrow,
-        arrowSize      : g.arrowSize,
-        strokeWidth    : g.strokeWidth,
-        showHeadMark   : g.showHeadMark,
-        headMarkSize   : g.headMarkSize,
-        properties     : Map<String, dynamic>.from(g.properties),
+      final lyr = layers[layerIdx];
+      lyr.gutters.removeAt(bestIdx);
+      lyr.gutters.add(Gutter(
+        id             : '$gId-A',
+        name           : '$gName-A',
+        shape          : gShape,
+        diameter       : gDiameter,
+        memo           : gMemo,
+        flowReversed   : gReversed,
+        color          : gColor,
+        showArrow      : gArrow,
+        arrowSize      : gArrowSize,
+        strokeWidth    : gStroke,
+        showHeadMark   : gHeadMark,
+        headMarkSize   : gHeadSize,
+        properties     : Map<String, dynamic>.from(gProps),
         points         : ptsA,
-        elevationStart : g.elevationStart,  // 始点→切断点は始点標高引き継ぎ
+        elevationStart : gElevStart,
       ));
-      layer.gutters.add(Gutter(
-        id             : '${g.id}-B',
-        name           : '${g.name}-B',
-        shape          : g.shape,
-        diameter       : g.diameter,
-        memo           : g.memo,
-        flowReversed   : g.flowReversed,
-        color          : g.color,
-        showArrow      : g.showArrow,
-        arrowSize      : g.arrowSize,
-        strokeWidth    : g.strokeWidth,
-        showHeadMark   : g.showHeadMark,
-        headMarkSize   : g.headMarkSize,
-        properties     : Map<String, dynamic>.from(g.properties),
+      lyr.gutters.add(Gutter(
+        id             : '$gId-B',
+        name           : '$gName-B',
+        shape          : gShape,
+        diameter       : gDiameter,
+        memo           : gMemo,
+        flowReversed   : gReversed,
+        color          : gColor,
+        showArrow      : gArrow,
+        arrowSize      : gArrowSize,
+        strokeWidth    : gStroke,
+        showHeadMark   : gHeadMark,
+        headMarkSize   : gHeadSize,
+        properties     : Map<String, dynamic>.from(gProps),
         points         : ptsB,
-        elevationEnd   : g.elevationEnd,    // 切断点→終点は終点標高引き継ぎ
+        elevationEnd   : gElevEnd,
       ));
     });
 
@@ -3195,12 +3215,12 @@ class _MapPageState extends State<MapPage> {
                             tooltip  : '削除',
                             onPressed: () => showDialog(
                               context: context,
-                              builder: (_) => AlertDialog(
+                              builder: (dlgCtx) => AlertDialog(
                                 title  : const Text('レイヤー削除'),
                                 content: Text('「${layer.name}」を削除しますか？'),
                                 actions: [
                                   TextButton(
-                                    onPressed: () => Navigator.pop(context),
+                                    onPressed: () => Navigator.pop(dlgCtx),
                                     child    : const Text('キャンセル'),
                                   ),
                                   FilledButton(
@@ -3215,7 +3235,7 @@ class _MapPageState extends State<MapPage> {
                                         }
                                       });
                                       _saveToLocalStorage();
-                                      Navigator.pop(context);
+                                      Navigator.pop(dlgCtx);
                                     },
                                     child: const Text('削除'),
                                   ),
