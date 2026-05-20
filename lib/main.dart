@@ -1452,7 +1452,7 @@ class _MapPageState extends State<MapPage> {
                     Wrap(
                       spacing: 6,
                       children: _kColorPalette.map((c) => GestureDetector(
-                        onTap : () => setS(() => g.color = c),
+                        onTap : () => setS(() { g.color = c; g.properties['color'] = c.toARGB32(); }),
                         child : Container(
                           width : 40,
                           height: 40,
@@ -1788,9 +1788,12 @@ class _MapPageState extends State<MapPage> {
              layer.categoryColors['未分類'] ??
              Colors.grey;
     }
-    // カテゴリ設定なし → g.color が既定(Colors.blue)のままなら
-    // 断面入力の有無で自動色分けする（外部GeoJSON読込後のデフォルト表示改善）
-    if (g.color.toARGB32() == Colors.blue.toARGB32()) {
+    // カテゴリ設定なし → g.color が「変更済み」かどうかを properties で判断。
+    // properties に 'color' キーが存在しない（外部GeoJSON読込直後など）かつ
+    // g.color がデフォルトの青のままであれば、断面形状で自動色分けする。
+    // properties['color'] が存在する場合やカテゴリ解除後は g.color を尊重する。
+    final hasExplicitColor = g.properties.containsKey('color');
+    if (!hasExplicitColor && g.color.toARGB32() == Colors.blue.toARGB32()) {
       return _defaultShapeColor(g);
     }
     return g.color;
@@ -2182,12 +2185,19 @@ class _MapPageState extends State<MapPage> {
                 _saveStateForUndo();
                 setState(() {
                   for (final g in layer.gutters) {
-                    if (bulkColor != null) g.color = bulkColor!;
+                    if (bulkColor != null) { g.color = bulkColor!; g.properties['color'] = bulkColor!.toARGB32(); }
                     g.strokeWidth  = bulkStroke;
                     g.showArrow    = bulkShowArrow;
                     g.arrowSize    = bulkArrowSize;
                     g.showHeadMark = bulkShowHead;
                     g.headMarkSize = bulkHeadSize;
+                  }
+                  // 色を一括指定した場合はカテゴリ色分けを解除する。
+                  // categoryKey が残っていると _getGutterColor がカテゴリ側を
+                  // 優先してしまい、g.color への変更が画面に反映されないため。
+                  if (bulkColor != null) {
+                    layer.categoryKey    = null;
+                    layer.categoryColors = {};
                   }
                 });
                 _saveToLocalStorage();
@@ -2218,24 +2228,32 @@ class _MapPageState extends State<MapPage> {
   //   ・見た目は「＞」のシェブロン形状（角度・大きさは従来相当を維持）。
   // ================================================================
 
-  List<Polyline> _createFlowArrowPolylines() {
+  /// 流向矢印ポリラインを返す。
+  /// [shadow] = true のとき、視認性向上用の白いアウトライン用ポリラインを返す。
+  /// 白アウトラインは矢印本体より2px太くし、本体の下レイヤーに描くことで
+  /// 路線色と被っても読めるようにする（縁取りとは異なり控えめな効果）。
+  List<Polyline> _createFlowArrowPolylines({bool shadow = false}) {
     final result = <Polyline>[];
     for (final layer in layers) {
       if (!layer.visible) continue;
       for (final g in layer.gutters) {
         if (!g.showArrow || g.points.length < 2) continue;
-        final color = _getGutterColor(g, layer);
-        final strokeW = math.max(1.0, _scaledStrokeWidth(g.strokeWidth * 0.55));
+        final color   = _getGutterColor(g, layer);
+        final baseW   = math.max(1.5, _scaledStrokeWidth(g.strokeWidth * 0.6));
+        final strokeW = shadow ? baseW + 2.0 : baseW;
         final segs = _arrowheadPolylinePoints(
           g.points[g.points.length - 2],
           g.points.last,
           sizeMeters: g.arrowSize,
         );
-        // ＞ 形状の2辺を1つの Polyline（折れ線）として追加
         result.add(Polyline(
           points     : segs,
-          color      : color,
+          color      : shadow
+              ? Colors.white.withValues(alpha: 0.75)
+              : color,
           strokeWidth: strokeW,
+          strokeCap  : StrokeCap.round,
+          strokeJoin : StrokeJoin.round,
         ));
       }
     }
@@ -2583,9 +2601,10 @@ class _MapPageState extends State<MapPage> {
                 strokeWidth: _scaledStrokeWidth(7.5)),
           ],
         ),
-      // 流向矢印（＞型ポリライン）を 1つの PolylineLayer にまとめて描画
-      // 旧実装では矢印1本ごとに PolygonLayer を生成していたが、
-      // 新実装では全矢印を1レイヤーにまとめることで大幅に軽量化。
+      // 流向矢印（＞型ポリライン）2パス描画で視認性を確保
+      // シャドウ（白・やや太め・半透明）を先に描き、その上に矢印本体を重ねる。
+      // 縁取りほど主張せず、どの路線色でも矢印が見やすくなる。
+      PolylineLayer(polylines: _createFlowArrowPolylines(shadow: true)),
       PolylineLayer(polylines: _createFlowArrowPolylines()),
       ..._createHeadMarkPolylines().map(
         (p) => PolylineLayer(polylines: [p]),
