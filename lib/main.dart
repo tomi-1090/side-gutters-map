@@ -500,10 +500,6 @@ class _MapPageState extends State<MapPage> {
     return result;
   }
 
-  void _addParsedLayer(List<Gutter> gutters, String name) {
-    _addParsedLayerWithStamps(gutters, [], name);
-  }
-
   void _addParsedLayerWithStamps(
       List<Gutter> gutters, List<ArrowStamp> stamps, String name) {
     if (gutters.isEmpty) return;
@@ -638,23 +634,38 @@ class _MapPageState extends State<MapPage> {
       final result = await FilePicker.platform.pickFiles(
         type             : FileType.custom,
         allowedExtensions: ['geojson', 'json'],
-        allowMultiple    : false,
+        allowMultiple    : true,
       );
       if (result == null || result.files.isEmpty) return;
 
-      final file    = result.files.first;
-      final data    = jsonDecode(utf8.decode(file.bytes!)) as Map<String, dynamic>;
-      final gutters = _parseGeoJsonFeatures(data['features'] as List<dynamic>? ?? []);
+      int totalAdded = 0;
+      int layerAdded = 0;
 
-      if (gutters.isEmpty) {
+      for (final file in result.files) {
+        try {
+          final data    = jsonDecode(utf8.decode(file.bytes!)) as Map<String, dynamic>;
+          final features = data['features'] as List<dynamic>? ?? [];
+          final gutters = _parseGeoJsonFeatures(features);
+          final stamps  = _parseArrowStampFeatures(features);
+
+          if (gutters.isEmpty) continue;
+
+          final layerName = file.name.replaceAll(
+              RegExp(r'\.(geojson|json)$', caseSensitive: false), '');
+          _addParsedLayerWithStamps(gutters, stamps, layerName);
+          totalAdded += gutters.length;
+          layerAdded++;
+        } catch (e) {
+          _showSnackBar('${file.name} の読み込みエラー: $e');
+        }
+      }
+
+      if (layerAdded == 0) {
         _showSnackBar('有効なラインがありませんでした');
         return;
       }
 
-      // ⑤ ファイル名のみをレイヤー名に使用（"レイヤーN -" プレフィックスを廃止）
-      final layerName = file.name.replaceAll(RegExp(r'\.(geojson|json)$', caseSensitive: false), '');
-      _addParsedLayer(gutters, layerName);
-      _showSnackBar('${gutters.length}件を「$layerName」に追加しました');
+      _showSnackBar('$totalAdded 件を $layerAdded レイヤーに追加しました');
 
       Future.delayed(const Duration(milliseconds: 300), () {
         if (mounted) _scaffoldKey.currentState?.openEndDrawer();
@@ -3119,10 +3130,41 @@ class _MapPageState extends State<MapPage> {
                                 ? FontWeight.bold
                                 : FontWeight.normal,
                           )),
-                      subtitle: Text(
-                        '${layer.gutters.length} 本'
-                        '${layer.categoryKey != null ? " ・ ${layer.categoryKey}" : ""}',
-                        style: const TextStyle(fontSize: 12),
+                      subtitle: Builder(
+                        builder: (_) {
+                          // 一括色が設定されているか判定
+                          // （categoryKey がなく、全路線が同じ色の場合）
+                          Color? bulkColor;
+                          if (layer.categoryKey == null && layer.gutters.isNotEmpty) {
+                            final firstColor = layer.gutters.first.color;
+                            final allSame = layer.gutters.every(
+                              (g) => g.color.toARGB32() == firstColor.toARGB32(),
+                            );
+                            if (allSame) bulkColor = firstColor;
+                          }
+                          return Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                '${layer.gutters.length} 本'
+                                '${layer.categoryKey != null ? " ・ ${layer.categoryKey}" : ""}',
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                              if (bulkColor != null) ...[
+                                const SizedBox(width: 6),
+                                Container(
+                                  width : 12,
+                                  height: 12,
+                                  decoration: BoxDecoration(
+                                    color : bulkColor,
+                                    shape : BoxShape.circle,
+                                    border: Border.all(color: Colors.black26, width: 0.5),
+                                  ),
+                                ),
+                              ],
+                            ],
+                          );
+                        },
                       ),
                       selected   : selectedLayerIndex == index,
                       selectedTileColor: Colors.blue.withValues(alpha: 0.08),
