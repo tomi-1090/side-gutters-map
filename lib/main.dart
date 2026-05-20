@@ -727,7 +727,7 @@ class _MapPageState extends State<MapPage> {
   /// 共通アップロード処理。[forceNewId] が true なら必ず新しいIDを発行する。
   Future<void> _uploadAllLayers({bool forceNewId = false}) async {
     if (layers.isEmpty) {
-      _showSnackBar('アップロードするデータがありません');
+      _showSnackBar('保存するデータがありません。先にGeoJSONを読み込んでください');
       return;
     }
 
@@ -799,11 +799,11 @@ class _MapPageState extends State<MapPage> {
 
       _showShareDialog(shareUrl, isNew: forceNewId);
       _showSnackBar(forceNewId
-          ? '✅ 新規URL発行完了！（${features.length}本）'
-          : '✅ 即時アップロード完了！（${features.length}本）');
+          ? '✅ 新しい共有リンクを発行しました（${features.length}本）'
+          : '✅ クラウドに保存しました（${features.length}本）');
 
     } catch (e) {
-      _showSnackBar('アップロード失敗: $e');
+      _showSnackBar('クラウド保存に失敗しました: $e');
       debugPrint('Upload error: $e');
     }
   }
@@ -814,26 +814,26 @@ class _MapPageState extends State<MapPage> {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        title: Text(isNew ? '新規URL発行完了' : '共有URL生成完了'),
+        title: Text(isNew ? '新しい共有リンクを発行しました' : 'クラウド保存が完了しました'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
               isNew
-                  ? '✅ 新しい共有URLを発行しました！'
-                  : '✅ 即時反映されます！',
+                  ? '✅ 新しい共有リンクを発行しました！'
+                  : '✅ 最新データをクラウドに保存しました！',
               style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold),
             ),
-            if (isNew) ...[
-              const SizedBox(height: 6),
-              const Text(
-                '※ 以前の共有URLとは別のURLです。',
-                style: TextStyle(fontSize: 12, color: Colors.grey),
-              ),
-            ],
+            const SizedBox(height: 8),
+            Text(
+              isNew
+                  ? 'このリンクを相手に送ると、今の地図データをそのまま開けます。\n以前の共有リンクとは別のURLです。'
+                  : '以前に共有したリンクを開き直すと、今回保存した最新データが表示されます。',
+              style: const TextStyle(fontSize: 12, color: Colors.black87),
+            ),
             const SizedBox(height: 12),
-            const Text('クリップボードにコピー済みです。'),
+            const Text('📋 リンクはクリップボードにコピー済みです。'),
             const SizedBox(height: 12),
             Container(
               padding: const EdgeInsets.all(10),
@@ -851,7 +851,7 @@ class _MapPageState extends State<MapPage> {
         actions: [
           TextButton.icon(
             icon: const Icon(Icons.copy),
-            label: const Text('再コピー'),
+            label: const Text('もう一度コピー'),
             onPressed: () => Clipboard.setData(ClipboardData(text: shareUrl)),
           ),
           FilledButton(
@@ -868,13 +868,13 @@ class _MapPageState extends State<MapPage> {
   // ================================================================
 
   void _generateShareUrl() => _showUrlInputDialog(
-    title      : 'GeoJSON共有URL生成',
-    hint       : 'https://raw.githubusercontent.com/...',
-    actionLabel: '生成',
+    title      : '外部GeoJSONから共有リンクを作成',
+    hint       : 'GeoJSONファイルの公開URL（例: https://raw.githubusercontent.com/...）',
+    actionLabel: 'リンクを作成',
     onSubmit   : (geojsonUrl) {
       final shareUrl = '${web.window.location.origin}/?geojson=${Uri.encodeComponent(geojsonUrl)}';
       Clipboard.setData(ClipboardData(text: shareUrl));
-      _showSnackBar('共有URLをコピーしました');
+      _showSnackBar('共有リンクをクリップボードにコピーしました');
       if (!context.mounted) return;
       _showShareDialog(shareUrl);
     },
@@ -2938,27 +2938,27 @@ class _MapPageState extends State<MapPage> {
         // ── 展開時のサブメニュー ──────────────────────────────────
         if (_fabExpanded) ...[
           _menuRow(
-            label  : 'ファイル読込',
+            label  : 'ファイルを開く（GeoJSON）',
             icon   : Icons.upload_file,
             onTap  : () { setState(() => _fabExpanded = false); _loadGeoJSON(); },
           ),
           _menuRow(
-            label  : 'エクスポート',
+            label  : 'ファイルに書き出す（GeoJSON）',
             icon   : Icons.download,
             onTap  : () { setState(() => _fabExpanded = false); _exportGeoJSON(); },
           ),
           _menuRow(
-            label  : 'アップロード共有',
+            label  : 'クラウド保存して共有リンクを更新',
             icon   : Icons.cloud_upload,
             onTap  : () { setState(() => _fabExpanded = false); _uploadAllLayers(); },
           ),
           _menuRow(
-            label  : '新規URL発行',
+            label  : '新しい共有リンクを発行',
             icon   : Icons.add_link,
             onTap  : () { setState(() => _fabExpanded = false); _uploadAllLayers(forceNewId: true); },
           ),
           _menuRow(
-            label  : 'Raw URL→共有URL',
+            label  : '外部GeoJSON URLから共有リンクを作成',
             icon   : Icons.link,
             onTap  : () { setState(() => _fabExpanded = false); _generateShareUrl(); },
           ),
@@ -3132,7 +3132,7 @@ class _MapPageState extends State<MapPage> {
         ),
         Expanded(
           child: layers.isEmpty
-              ? const Center(child: Text('レイヤーがありません\nGeoJSONを読み込んでください',
+              ? const Center(child: Text('レイヤーがありません\n右下の ︙ メニューから\nGeoJSONファイルを開いてください',
                   textAlign: TextAlign.center))
               : ReorderableListView.builder(
                   itemCount  : layers.length,
