@@ -350,7 +350,7 @@ class _MapPageState extends State<MapPage> {
 
   // 端点スナップ ON/OFF（変更しないため final）
   final bool _snapEnabled = true;
-  static const _kSnapRadiusM = 15.0; // スナップ判定距離（メートル）
+  static const _kSnapRadiusM = 3.0; // スナップ判定距離（メートル）
 
   // ================================================================
   // 初期化
@@ -862,23 +862,6 @@ class _MapPageState extends State<MapPage> {
       ),
     );
   }
-
-  // ================================================================
-  // 共有URL生成（手動Raw URL入力）
-  // ================================================================
-
-  void _generateShareUrl() => _showUrlInputDialog(
-    title      : '外部GeoJSONから共有リンクを作成',
-    hint       : 'GeoJSONファイルの公開URL（例: https://raw.githubusercontent.com/...）',
-    actionLabel: 'リンクを作成',
-    onSubmit   : (geojsonUrl) {
-      final shareUrl = '${web.window.location.origin}/?geojson=${Uri.encodeComponent(geojsonUrl)}';
-      Clipboard.setData(ClipboardData(text: shareUrl));
-      _showSnackBar('共有リンクをクリップボードにコピーしました');
-      if (!context.mounted) return;
-      _showShareDialog(shareUrl);
-    },
-  );
 
   // ================================================================
   // Feature リスト生成（エクスポート・アップロード共用）
@@ -2502,6 +2485,30 @@ class _MapPageState extends State<MapPage> {
                     : Colors.blue,
     foregroundColor: Colors.white,
     actions: [
+      // ファイルを開く
+      IconButton(
+        icon    : const Icon(Icons.folder_open),
+        tooltip : 'ファイルを開く（GeoJSON）',
+        onPressed: _loadGeoJSON,
+      ),
+      // ファイルに書き出す
+      IconButton(
+        icon    : const Icon(Icons.save_alt),
+        tooltip : 'ファイルに書き出す（GeoJSON）',
+        onPressed: _exportGeoJSON,
+      ),
+      // 新規共有リンクを発行
+      IconButton(
+        icon    : const Icon(Icons.share),
+        tooltip : '新しい共有リンクを発行',
+        onPressed: () => _uploadAllLayers(forceNewId: true),
+      ),
+      // URLを更新
+      IconButton(
+        icon    : const Icon(Icons.cloud_sync),
+        tooltip : 'URLを更新（クラウド保存）',
+        onPressed: _uploadAllLayers,
+      ),
       // Undo / Redo
       IconButton(
         icon     : const Icon(Icons.undo),
@@ -2928,44 +2935,11 @@ class _MapPageState extends State<MapPage> {
   // FAB：スマホ向けに2列グリッド＋展開メニュー方式
   // ================================================================
 
-  bool _fabExpanded = false;
-
   Widget _buildFabColumn() {
     return Column(
       mainAxisSize     : MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
-        // ── 展開時のサブメニュー ──────────────────────────────────
-        if (_fabExpanded) ...[
-          _menuRow(
-            label  : 'ファイルを開く（GeoJSON）',
-            icon   : Icons.upload_file,
-            onTap  : () { setState(() => _fabExpanded = false); _loadGeoJSON(); },
-          ),
-          _menuRow(
-            label  : 'ファイルに書き出す（GeoJSON）',
-            icon   : Icons.download,
-            onTap  : () { setState(() => _fabExpanded = false); _exportGeoJSON(); },
-          ),
-          _menuRow(
-            label  : 'クラウド保存して共有リンクを更新',
-            icon   : Icons.cloud_upload,
-            onTap  : () { setState(() => _fabExpanded = false); _uploadAllLayers(); },
-          ),
-          _menuRow(
-            label  : '新しい共有リンクを発行',
-            icon   : Icons.add_link,
-            onTap  : () { setState(() => _fabExpanded = false); _uploadAllLayers(forceNewId: true); },
-          ),
-          _menuRow(
-            label  : '外部GeoJSON URLから共有リンクを作成',
-            icon   : Icons.link,
-            onTap  : () { setState(() => _fabExpanded = false); _generateShareUrl(); },
-          ),
-          const SizedBox(height: 4),
-          const Divider(height: 1),
-          const SizedBox(height: 4),
-        ],
 
         // ── 常時表示のメインボタン群 ──────────────────────────────
         // 現在地
@@ -3044,13 +3018,14 @@ class _MapPageState extends State<MapPage> {
         ),
         const SizedBox(height: 6),
 
-        // その他メニュー展開
+        // URLを更新（クラウド保存）
         FloatingActionButton(
-          heroTag        : 'menu_expand',
-          backgroundColor: _fabExpanded ? Colors.blueGrey : Colors.blue,
+          heroTag        : 'url_update',
+          backgroundColor: Colors.blue,
           foregroundColor: Colors.white,
-          onPressed      : () => setState(() => _fabExpanded = !_fabExpanded),
-          child          : Icon(_fabExpanded ? Icons.close : Icons.more_vert),
+          tooltip        : 'URLを更新（クラウド保存）',
+          onPressed      : _uploadAllLayers,
+          child          : const Icon(Icons.cloud_sync),
         ),
       ],
     );
@@ -3132,7 +3107,7 @@ class _MapPageState extends State<MapPage> {
         ),
         Expanded(
           child: layers.isEmpty
-              ? const Center(child: Text('レイヤーがありません\n右下の ︙ メニューから\nGeoJSONファイルを開いてください',
+              ? const Center(child: Text('レイヤーがありません\n上部のフォルダアイコンから\nGeoJSONファイルを開いてください',
                   textAlign: TextAlign.center))
               : ReorderableListView.builder(
                   itemCount  : layers.length,
