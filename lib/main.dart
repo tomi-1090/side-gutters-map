@@ -557,6 +557,10 @@ class _MapPageState extends State<MapPage> {
             return;
           }
 
+          // FeatureCollection トップレベルの layerStyles を取得
+          final rawLayerStyles =
+              (data['layerStyles'] as Map<String, dynamic>?) ?? {};
+
           int total = 0;
           setState(() {
             for (final entry in layerMap.entries) {
@@ -567,18 +571,30 @@ class _MapPageState extends State<MapPage> {
               final stamps = _parseArrowStampFeatures(
                 stampLayerMap[entry.key] ?? [],
               );
+
+              // layerStyles が保存されていればそれを復元、なければデフォルト
+              final styleEntry =
+                  rawLayerStyles[entry.key] as Map<String, dynamic>?;
+              final String? categoryKey = styleEntry != null
+                  ? styleEntry['categoryKey'] as String?
+                  : 'shape';
+              final Map<String, Color> categoryColors = styleEntry != null
+                  ? ((styleEntry['categoryColors'] as Map<String, dynamic>?) ?? {})
+                      .map((k, v) => MapEntry(k, Color(v as int)))
+                  : {
+                      'BOX'  : Colors.orange,
+                      '円形'  : Colors.green,
+                      '開渠'  : Colors.blue,
+                      '未分類': Colors.grey,
+                    };
+
               layers.add(GutterLayer(
                 id            : entry.key,
                 name          : layerNames[entry.key] ?? '共有データ',
                 gutters       : gutters,
                 stamps        : stamps,
-                categoryKey   : 'shape',
-                categoryColors: {
-                  'BOX'  : Colors.orange,
-                  '円形'  : Colors.green,
-                  '開渠'  : Colors.blue,
-                  '未分類': Colors.grey,
-                },
+                categoryKey   : categoryKey,
+                categoryColors: categoryColors,
               ));
             }
           });
@@ -729,9 +745,22 @@ class _MapPageState extends State<MapPage> {
       }
 
       final features = _buildFeatureList(withLayerMeta: true);
+      // レイヤーのスタイル設定（categoryKey・categoryColors）を別途保存
+      // FeatureCollection のトップレベルに埋め込むことで読み込み時に復元できる
+      final layerStyles = {
+        for (final layer in layers)
+          layer.id: {
+            'categoryKey'   : layer.categoryKey,
+            'categoryColors': layer.categoryColors.map(
+              (k, v) => MapEntry(k, v.toARGB32()),
+            ),
+            'visible': layer.visible,
+          },
+      };
       final geojson = {
         'type'         : 'FeatureCollection',
         'features'     : features,
+        'layerStyles'  : layerStyles,
         'exported_at'  : DateTime.now().toIso8601String(),
         'layers_count' : layers.length,
         'gutters_count': features.length,
