@@ -1,6 +1,5 @@
 // api/uploadToBlob.js
 import { put } from '@vercel/blob';
-import { v4 as uuidv4 } from 'uuid';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -9,8 +8,11 @@ const CORS_HEADERS = {
 };
 
 export default async function handler(req, res) {
+  // CORSヘッダーを全レスポンスに付与
+  Object.entries(CORS_HEADERS).forEach(([k, v]) => res.setHeader(k, v));
+
   if (req.method === 'OPTIONS') {
-    return res.status(204).set(CORS_HEADERS).end();
+    return res.status(204).end();
   }
 
   if (req.method !== 'POST') {
@@ -18,36 +20,60 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { geojson, shareId: rawShareId } = req.body || {};
+    // Vercelランタイムによってはreq.bodyが文字列のままの場合があるため手動パース
+    let body = req.body;
+    if (typeof body === 'string') {
+      try { body = JSON.parse(body); } catch { body = {}; }
+    }
+    body = body || {};
+
+    const { geojson, shareId: rawShareId } = body;
+
     if (!geojson) {
       return res.status(400).json({ error: 'No geojson data' });
     }
 
-    // shareId強化（既存があれば再利用）
-    const shareId = (rawShareId && rawShareId.length > 8) 
-      ? rawShareId 
-      : uuidv4();
+    // BLOB_READ_WRITE_TOKEN が設定されているか確認
+    if (!process.env.BLOB_READ_WRITE_TOKEN) {
+      console.error('[uploadToBlob] BLOB_READ_WRITE_TOKEN is not set');
+      return res.status(500).json({ error: 'BLOB_READ_WRITE_TOKEN is not configured' });
+    }
+
+    // shareId：英数字・ハイフン・アンダーバーのみ許可（パストラバーサル対策）
+    const shareId = /^[\w-]{1,}$/.test((rawShareId ?? '').trim())
+      ? rawShareId.trim()
+      : Date.now().toString();
 
     const filename = `shared/${shareId}.geojson`;
+    const jsonBody = JSON.stringify(geojson);
 
-    const blob = await put(filename, JSON.stringify(geojson), {
-      access: 'public',
+    // @vercel/blob put API
+    // allowOverwrite は SDK v0.22+ で対応。古いバージョンでは不要（putは上書きがデフォルト）
+    const blob = await put(filename, jsonBody, {
+      access         : 'public',
       addRandomSuffix: false,
-      allowOverwrite: true,     // ← これを追加（重要！）
-      cacheControlMaxAge: 0,
+      contentType    : 'application/geo+json',
     });
 
-    const shareUrl = `${req.headers.origin}/?geojson=${encodeURIComponent(blob.url)}`;
+    // originヘッダーが無い場合のフォールバック
+    const origin   = req.headers.origin ?? req.headers.host ?? '';
+    const shareUrl = origin
+      ? `${origin}/?geojson=${encodeURIComponent(blob.url)}`
+      : blob.url;
 
     return res.status(200).json({
-      success: true,
-      rawUrl: blob.url,
+      success : true,
+      rawUrl  : blob.url,
       shareUrl: shareUrl,
-      shareId: shareId,
+      shareId : shareId,
     });
 
   } catch (error) {
-    console.error('[uploadToBlob]', error);
-    return res.status(500).json({ error: error.message });
+    console.error('[uploadToBlob] error:', error);
+    // エラーの詳細をレスポンスに含めてデバッグを容易にする
+    return res.status(500).json({
+      error  : error.message ?? String(error),
+      detail : error.stack   ?? '',
+    });
   }
 }
