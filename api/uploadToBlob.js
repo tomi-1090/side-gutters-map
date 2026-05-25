@@ -47,11 +47,11 @@ export default async function handler(req, res) {
     const filename = `shared/${shareId}.geojson`;
     const jsonBody = JSON.stringify(geojson);
 
-    // @vercel/blob put API
-    // allowOverwrite は SDK v0.22+ で対応。古いバージョンでは不要（putは上書きがデフォルト）
+    // allowOverwrite: true で既存ファイルを上書き（URLを更新する場合に必須）
     const blob = await put(filename, jsonBody, {
       access         : 'public',
       addRandomSuffix: false,
+      allowOverwrite : true,
       contentType    : 'application/geo+json',
     });
 
@@ -70,10 +70,9 @@ export default async function handler(req, res) {
 
   } catch (error) {
     console.error('[uploadToBlob] error:', error);
-    // エラーの詳細をレスポンスに含めてデバッグを容易にする
     return res.status(500).json({
-      error  : error.message ?? String(error),
-      detail : error.stack   ?? '',
+      error : error.message ?? String(error),
+      detail: error.stack   ?? '',
     });
   }
 }
