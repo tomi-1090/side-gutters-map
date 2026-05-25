@@ -1262,7 +1262,7 @@ class _MapPageState extends State<MapPage> {
     });
 
     _saveToLocalStorage();
-    _showSnackBar('緑の流向矢印を追加しました');
+    _showSnackBar('勾配矢印を追加しました');
   }
 
   // ================================================================
@@ -2340,7 +2340,7 @@ class _MapPageState extends State<MapPage> {
       case _EditMode.delete:
         return '削除モード';
       case _EditMode.stamp:
-        return '流向矢印モード（${_stamp2PtFirst == null ? "1点目をタップ" : "2点目をタップ"}）';
+        return '勾配矢印モード（${_stamp2PtFirst == null ? "1点目をタップ" : "2点目をタップ"}）';
       case _EditMode.none:
         return '側溝踏査マップ';
     }
@@ -2538,7 +2538,7 @@ class _MapPageState extends State<MapPage> {
       PolylineLayer(polylines: _createFlowArrowPolylines(shadow: true)),
       PolylineLayer(polylines: _createFlowArrowPolylines()),
       PolylineLayer(polylines: _createHeadMarkPolylines()),
-      // === 流向矢印スタンプ（→）描画 ===
+      // === 勾配矢印スタンプ（→）描画 ===
       MarkerLayer(
         markers: [
           for (final layer in layers)
@@ -2551,7 +2551,7 @@ class _MapPageState extends State<MapPage> {
   );
 
   // ================================================================
-  // 流向矢印スタンプ Marker 生成（ズーム連動 + タップ編集）
+  // 勾配矢印スタンプ Marker 生成（ズーム連動 + タップ編集）
   // ================================================================
 
   Marker _buildStampMarker(ArrowStamp stamp, GutterLayer layer) {
@@ -2632,7 +2632,7 @@ class _MapPageState extends State<MapPage> {
                   children: [
                     Expanded(
                       child: Text(
-                        '流向矢印の編集',
+                        '勾配矢印の編集',
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
                     ),
@@ -2690,7 +2690,7 @@ class _MapPageState extends State<MapPage> {
                         setState(() => layer.stamps.remove(stamp));
                         _saveToLocalStorage();
                         Navigator.pop(ctx);
-                        _showSnackBar('矢印を削除しました');
+                        _showSnackBar('勾配矢印を削除しました');
                       },
                     ),
                     const Spacer(),
@@ -2705,7 +2705,7 @@ class _MapPageState extends State<MapPage> {
                         setState(() => stamp.angleDeg = tempAngle);
                         _saveToLocalStorage();
                         Navigator.pop(ctx);
-                        _showSnackBar('矢印の角度を更新しました');
+                        _showSnackBar('勾配矢印の角度を更新しました');
                       },
                       child: const Text('保存'),
                     ),
@@ -2853,7 +2853,7 @@ class _MapPageState extends State<MapPage> {
         // 矢印スタンプモード（2点指定）
         _roundFab(
           icon     : Icons.straighten,
-          tooltip  : '流向矢印追加（2点指定）',
+          tooltip  : '勾配矢印追加（2点指定）',
           onTap    : _toggleStamp2PtMode,
           color    : isStamp2Pt ? Colors.teal.shade700 : Colors.white,
           iconColor: isStamp2Pt ? Colors.white          : Colors.teal.shade700,
