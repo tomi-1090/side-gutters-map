@@ -470,12 +470,22 @@ class _MapPageState extends State<MapPage> {
   void _addParsedLayerWithStamps(
       List<Gutter> gutters, List<ArrowStamp> stamps, String name) {
     if (gutters.isEmpty) return;
+    // 読み込み時点でデフォルトカテゴリ色分け（断面形状）を自動適用
+    const defaultCategoryKey = 'shape';
+    final defaultColors = {
+      'BOX'  : Colors.orange,
+      '円形'  : Colors.green,
+      '開渠'  : Colors.blue,
+      '未分類': Colors.grey,
+    };
     setState(() {
       layers.add(GutterLayer(
-        id     : DateTime.now().millisecondsSinceEpoch.toString(),
-        name   : name,
-        gutters: gutters,
-        stamps : stamps,
+        id            : DateTime.now().millisecondsSinceEpoch.toString(),
+        name          : name,
+        gutters       : gutters,
+        stamps        : stamps,
+        categoryKey   : defaultCategoryKey,
+        categoryColors: defaultColors,
       ));
     });
     _showAllGutters();
@@ -558,10 +568,17 @@ class _MapPageState extends State<MapPage> {
                 stampLayerMap[entry.key] ?? [],
               );
               layers.add(GutterLayer(
-                id     : entry.key,
-                name   : layerNames[entry.key] ?? '共有データ',
-                gutters: gutters,
-                stamps : stamps,
+                id            : entry.key,
+                name          : layerNames[entry.key] ?? '共有データ',
+                gutters       : gutters,
+                stamps        : stamps,
+                categoryKey   : 'shape',
+                categoryColors: {
+                  'BOX'  : Colors.orange,
+                  '円形'  : Colors.green,
+                  '開渠'  : Colors.blue,
+                  '未分類': Colors.grey,
+                },
               ));
             }
           });
@@ -1706,9 +1723,16 @@ class _MapPageState extends State<MapPage> {
               if (name.isEmpty) return; // 空欄は受け付けない
               setState(() {
                 layers.add(GutterLayer(
-                  id     : DateTime.now().millisecondsSinceEpoch.toString(),
-                  name   : name,
-                  gutters: [],
+                  id            : DateTime.now().millisecondsSinceEpoch.toString(),
+                  name          : name,
+                  gutters       : [],
+                  categoryKey   : 'shape',
+                  categoryColors: {
+                    'BOX'  : Colors.orange,
+                    '円形'  : Colors.green,
+                    '開渠'  : Colors.blue,
+                    '未分類': Colors.grey,
+                  },
                 ));
               });
               _saveToLocalStorage();
