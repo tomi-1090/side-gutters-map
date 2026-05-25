@@ -13,6 +13,9 @@ import 'package:web/web.dart' as web;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 
+// 座標を小数点6桁（約11cm精度）に丸める軽量ヘルパー
+double _round6(double v) => (v * 1e6).roundToDouble() / 1e6;
+
 void main() => runApp(const MyApp());
 
 class MyApp extends StatelessWidget {
@@ -75,10 +78,16 @@ const _kStorageKey = 'layers_data';
 const _kShareIdKey = 'share_id';
 const _kShareRawUrlKey = 'share_raw_url'; // Blob rawUrl（トークン付き）を保存
 
+// 矢印の翼開き角 tan(15°) — 事前計算定数
+const _kTan15 = 0.26794919243; // tan(15° in radians)
+
 // Undo履歴上限
 const _kUndoLimit = 20;
 
-// GeoJSONプロパティキー → 日本語表示名マッピング
+// カテゴリ色分けパレット（_generateCategoryColors で使用）
+const _kCategoryPalette = [
+  ...Colors.primaries, Colors.brown, Colors.grey, Colors.pink, Colors.cyan,
+];
 // カテゴリ色分けダイアログの属性選択ドロップダウンで使用
 const _kPropKeyLabels = <String, String>{
   'shape'          : '断面形状',
@@ -87,7 +96,6 @@ const _kPropKeyLabels = <String, String>{
   'name'           : '名称',
   'id'             : 'ID',
   'flowReversed'   : '流向反転',
-  'gradient'       : '勾配',
   'layer'          : 'レイヤー名',
   'layerId'        : 'レイヤーID',
   'layerVisible'   : 'レイヤー表示',
@@ -100,8 +108,6 @@ const _kPropKeyLabels = <String, String>{
   // 外部GeoJSONでよく使われる日本語キーもそのまま通す
   '断面形状'       : '断面形状',
   '口径'           : '管径・口径',
-  'gradient_label' : '勾配',
-  'slope'          : '勾配',
 };
 
 // ================================================================
@@ -131,8 +137,8 @@ class ArrowStamp {
     'geometry': {
       'type'       : 'Point',
       'coordinates': [
-        double.parse(position.longitude.toStringAsFixed(6)),
-        double.parse(position.latitude.toStringAsFixed(6)),
+        _round6(position.longitude),
+        _round6(position.latitude),
       ],
     },
     'properties': {
@@ -219,9 +225,6 @@ class Gutter {
   double strokeWidth;
   bool showHeadMark;
   double headMarkSize;
-  // 勾配フィールド（始点・終点の標高差と勾配）
-  double? elevationStart;  // 始点標高（m）
-  double? elevationEnd;    // 終点標高（m）
 
   Gutter({
     required this.id,
@@ -238,36 +241,8 @@ class Gutter {
     this.strokeWidth  = 7.5,
     this.showHeadMark = false,
     this.headMarkSize = 10.0,
-    this.elevationStart,
-    this.elevationEnd,
   })  : color      = color ?? Colors.blue,
         properties = properties ?? {};
-
-  /// 計算された勾配（1/N 表記の分母 N）。null なら未設定
-  double? get gradientDenominator {
-    if (elevationStart == null || elevationEnd == null) return null;
-    if (points.length < 2) return null;
-    final heightDiff = (elevationStart! - elevationEnd!).abs();
-    if (heightDiff < 1e-6) return null;
-    // 2点間の水平距離（メートル）
-    double totalDist = 0;
-    const mPerDegLat = 111320.0;
-    for (int i = 0; i < points.length - 1; i++) {
-      final dy = (points[i + 1].latitude  - points[i].latitude)  * mPerDegLat;
-      final dx = (points[i + 1].longitude - points[i].longitude) *
-          mPerDegLat * math.cos(points[i].latitude * math.pi / 180);
-      totalDist += math.sqrt(dx * dx + dy * dy);
-    }
-    if (totalDist < 1e-3) return null;
-    return totalDist / heightDiff;
-  }
-
-  /// 勾配を文字列で返す。例: "1/200" or "---"
-  String get gradientLabel {
-    final n = gradientDenominator;
-    if (n == null) return '---';
-    return '1/${n.round()}';
-  }
 
   Map<String, dynamic> toJson() => {
     'id'            : id,
@@ -284,8 +259,6 @@ class Gutter {
     'strokeWidth'   : strokeWidth,
     'showHeadMark'  : showHeadMark,
     'headMarkSize'  : headMarkSize,
-    'elevationStart': elevationStart,
-    'elevationEnd'  : elevationEnd,
   };
 
   factory Gutter.fromJson(Map<String, dynamic> j) => Gutter(
@@ -305,10 +278,13 @@ class Gutter {
     strokeWidth    : (j['strokeWidth'] as num?)?.toDouble() ?? 7.5,
     showHeadMark   : j['showHeadMark'] as bool? ?? false,
     headMarkSize   : (j['headMarkSize'] as num?)?.toDouble() ?? 10.0,
-    elevationStart : (j['elevationStart'] as num?)?.toDouble(),
-    elevationEnd   : (j['elevationEnd']   as num?)?.toDouble(),
   );
 }
+
+// ================================================================
+// 編集モード列挙型
+// ================================================================
+enum _EditMode { none, add, cut, delete, stamp }
 
 // ================================================================
 // ページ
@@ -330,6 +306,7 @@ class _MapPageState extends State<MapPage> {
   int?              selectedLayerIndex;
 
   // モード関連
+  _EditMode _currentMode = _EditMode.none;
   bool isAddingNew = false;
   List<LatLng> newPoints = [];
   bool isCutting = false;
@@ -346,10 +323,9 @@ class _MapPageState extends State<MapPage> {
   String? _sharedGeoJsonUrl;
 
   // ズームレベルに応じた線幅スケーリング用
-  double _currentZoom = 17.0;
+  double _currentZoom  = 17.0;
+  double _zoomScale    = 1.0; // math.pow(2, (zoom-17)*0.5) のキャッシュ
 
-  // 端点スナップ ON/OFF（変更しないため final）
-  final bool _snapEnabled = true;
   static const _kSnapRadiusM = 3.0; // スナップ判定距離（メートル）
 
   // ================================================================
@@ -385,7 +361,7 @@ class _MapPageState extends State<MapPage> {
 
   Future<void> _saveToLocalStorage() async {
     if (!mounted) return;
-    final json = jsonEncode(layers.map((l) => l.toJson()).toList());
+    final json = _serializeLayers();
     try {
       web.window.localStorage.setItem(_kStorageKey, json);
     } catch (_) {}
@@ -410,10 +386,7 @@ class _MapPageState extends State<MapPage> {
     }
     if (data == null || data.isEmpty) return;
     try {
-      final parsed = (jsonDecode(data) as List<dynamic>)
-          .map((j) => GutterLayer.fromJson(j as Map<String, dynamic>))
-          .toList();
-      if (mounted) setState(() => layers = parsed);
+      if (mounted) setState(() => layers = _deserializeLayers(data!));
     } catch (e) {
       debugPrint('JSON parse error: $e');
     }
@@ -479,8 +452,6 @@ class _MapPageState extends State<MapPage> {
         headMarkSize: (props['headMarkSize'] as num?)?.toDouble() ?? 10.0,
         points      : points,
         properties  : mergedProps,
-        elevationStart : (props['elevationStart'] as num?)?.toDouble(),
-        elevationEnd   : (props['elevationEnd'] as num?)?.toDouble(),
       ));
     }
     return result;
@@ -875,10 +846,9 @@ class _MapPageState extends State<MapPage> {
             'type'    : 'Feature',
             'geometry': {
               'type'       : 'LineString',
-              // 座標を小数点6桁に丸めてデータ軽量化（約11cm精度で十分）
               'coordinates': g.points.map((p) => [
-                double.parse(p.longitude.toStringAsFixed(6)),
-                double.parse(p.latitude.toStringAsFixed(6)),
+                _round6(p.longitude),
+                _round6(p.latitude),
               ]).toList(),
             },
             'properties': {
@@ -899,9 +869,6 @@ class _MapPageState extends State<MapPage> {
                 'arrowSize'      : g.arrowSize,
                 'showHeadMark'   : g.showHeadMark,
                 'headMarkSize'   : g.headMarkSize,
-                if (g.elevationStart != null) 'elevationStart': g.elevationStart,
-                if (g.elevationEnd   != null) 'elevationEnd'  : g.elevationEnd,
-                if (g.gradientLabel  != '---') 'gradient'     : g.gradientLabel,
               },
             },
           },
@@ -925,85 +892,59 @@ class _MapPageState extends State<MapPage> {
   // モード切り替え
   // ================================================================
 
-    void _toggleAddMode() => setState(() {
-    isAddingNew = !isAddingNew;
+    // ================================================================
+  // モード切り替え
+  // ================================================================
 
-    if (isAddingNew) {
-      // 他のモードをすべてオフ
-      isCutting = false;
-      isDeleting = false;
-      isStamp2Pt = false;
-      _stamp2PtFirst = null;
-      newPoints.clear();
-    } else {
-      // モード終了時もクリア
-      newPoints.clear();
-    }
-  });
-
-  void _toggleCutMode() => setState(() {
-    isCutting      = !isCutting;
-    isAddingNew    = false;
-    isDeleting     = false;
-    isStamp2Pt     = false;
-    _stamp2PtFirst = null;
-  });
-
-  void _toggleDeleteMode() => setState(() {
-    isDeleting = !isDeleting;
-    if (isDeleting) {
-      isAddingNew = false;
-      isCutting = false;
-      isStamp2Pt = false;
-      _stamp2PtFirst = null;
-    }
-  });
-
-    void _toggleStamp2PtMode() {
+  /// アクティブモードを切り替える。同じモードを渡すとオフになる。
+  void _setActiveMode(_EditMode mode) {
     setState(() {
-      isStamp2Pt = !isStamp2Pt;
-
-      if (isStamp2Pt) {
-        // 他のモードをすべてオフ
-        isAddingNew = false;
-        isCutting = false;
-        isDeleting = false;
-        _stamp2PtFirst = null;
-      }
+      final next = (mode == _currentMode) ? _EditMode.none : mode;
+      _currentMode   = next;
+      isAddingNew    = next == _EditMode.add;
+      isCutting      = next == _EditMode.cut;
+      isDeleting     = next == _EditMode.delete;
+      isStamp2Pt     = next == _EditMode.stamp;
+      _stamp2PtFirst = null;
+      if (!isAddingNew) newPoints.clear();
     });
   }
+
+  void _toggleAddMode()     => _setActiveMode(_EditMode.add);
+  void _toggleCutMode()     => _setActiveMode(_EditMode.cut);
+  void _toggleDeleteMode()  => _setActiveMode(_EditMode.delete);
+  void _toggleStamp2PtMode()=> _setActiveMode(_EditMode.stamp);
   // ================================================================
   // Undo / Redo
   // ================================================================
 
+  String _serializeLayers() => jsonEncode(layers.map((l) => l.toJson()).toList());
+
+  List<GutterLayer> _deserializeLayers(String json) =>
+      (jsonDecode(json) as List<dynamic>)
+          .map((j) => GutterLayer.fromJson(j as Map<String, dynamic>))
+          .toList();
+
   void _saveStateForUndo() {
-    _undoStack.add(jsonEncode(layers.map((l) => l.toJson()).toList()));
+    _undoStack.add(_serializeLayers());
     _redoStack.clear();
     if (_undoStack.length > _kUndoLimit) _undoStack.removeAt(0);
   }
 
+  void _applySnapshot(String snapshot, List<String> pushTo) {
+    pushTo.add(_serializeLayers());
+    setState(() => layers = _deserializeLayers(snapshot));
+    _saveToLocalStorage();
+  }
+
   void _undo() {
     if (_undoStack.isEmpty) return;
-    _redoStack.add(jsonEncode(layers.map((l) => l.toJson()).toList()));
-    final prev = _undoStack.removeLast();
-    setState(() {
-      layers = (jsonDecode(prev) as List<dynamic>)
-          .map((j) => GutterLayer.fromJson(j))
-          .toList();
-    });
-    _saveToLocalStorage();
+    _applySnapshot(_undoStack.removeLast(), _redoStack);
   }
 
   void _redo() {
     if (_redoStack.isEmpty) return;
-    _undoStack.add(jsonEncode(layers.map((l) => l.toJson()).toList()));
-    final next = _redoStack.removeLast();
-    setState(() {
-      layers = (jsonDecode(next) as List<dynamic>)
-          .map((j) => GutterLayer.fromJson(j))
-          .toList();
-    });
-    _saveToLocalStorage();
+    _applySnapshot(_redoStack.removeLast(), _undoStack);
   }
 
     // ================================================================
@@ -1038,12 +979,7 @@ class _MapPageState extends State<MapPage> {
     }
 
     if (isAddingNew) {
-      final snapped = _trySnap(point);
-      if (snapped != null) {
-        setState(() => newPoints.add(snapped));
-      } else {
-        setState(() => newPoints.add(point));
-      }
+      setState(() => newPoints.add(_trySnap(point) ?? point));
       return;
     }
 
@@ -1091,7 +1027,7 @@ class _MapPageState extends State<MapPage> {
     // 折れ点スナップ：中間点が近ければ射影点の代わりに折れ点で切断
     LatLng cutPoint = bestProj;
     int?   snapVertexIdx;
-    if (_snapEnabled) {
+    {
       double bestVertDist = _kSnapRadiusM;
       for (int k = 1; k < pts.length - 1; k++) { // 両端除く中間点のみ
         final d = _distance.distance(tapPoint, pts[k]);
@@ -1120,8 +1056,6 @@ class _MapPageState extends State<MapPage> {
     final gHeadMark  = g.showHeadMark;
     final gHeadSize  = g.headMarkSize;
     final gProps     = Map<String, dynamic>.from(g.properties);
-    final gElevStart = g.elevationStart;
-    final gElevEnd   = g.elevationEnd;
 
     final List<LatLng> ptsA;
     final List<LatLng> ptsB;
@@ -1152,7 +1086,6 @@ class _MapPageState extends State<MapPage> {
         headMarkSize   : gHeadSize,
         properties     : Map<String, dynamic>.from(gProps),
         points         : ptsA,
-        elevationStart : gElevStart,
       ));
       lyr.gutters.add(Gutter(
         id             : '$gId-B',
@@ -1169,7 +1102,6 @@ class _MapPageState extends State<MapPage> {
         headMarkSize   : gHeadSize,
         properties     : Map<String, dynamic>.from(gProps),
         points         : ptsB,
-        elevationEnd   : gElevEnd,
       ));
     });
 
@@ -1191,7 +1123,6 @@ class _MapPageState extends State<MapPage> {
   /// 全レイヤーの端点・折れ点から最近傍を探してスナップ。
   /// _kSnapRadiusM 以内に点があればその座標を返し、なければ null。
   LatLng? _trySnap(LatLng tap) {
-    if (!_snapEnabled) return null;
     double  best    = _kSnapRadiusM;
     LatLng? snapped;
     for (final layer in layers) {
@@ -1345,11 +1276,6 @@ class _MapPageState extends State<MapPage> {
     final shapeCtrl = TextEditingController(text: g.shape);
     final diamCtrl  = TextEditingController(text: g.diameter);
     final memCtrl   = TextEditingController(text: g.memo);
-    // 勾配計算用：始点・終点の標高（m）
-    final elevStartCtrl = TextEditingController(
-        text: g.elevationStart != null ? g.elevationStart!.toStringAsFixed(3) : '');
-    final elevEndCtrl   = TextEditingController(
-        text: g.elevationEnd   != null ? g.elevationEnd!.toStringAsFixed(3)   : '');
 
     showModalBottomSheet(
       context           : context,
@@ -1554,23 +1480,12 @@ class _MapPageState extends State<MapPage> {
                                 g.shape    = shapeCtrl.text.trim();
                                 g.diameter = diamCtrl.text.trim();
                                 g.memo     = memCtrl.text.trim();
-                                g.elevationStart = double.tryParse(elevStartCtrl.text);
-                                g.elevationEnd   = double.tryParse(elevEndCtrl.text);
                                 // カテゴリ色分けがpropertiesを参照するため
                                 // フィールドと同期して書き込む
-                                g.properties['shape']          = g.shape;
-                                g.properties['diameter']       = g.diameter;
-                                g.properties['memo']           = g.memo;
-                                g.properties['name']           = g.name;
-                                if (g.elevationStart != null){
-                                  g.properties['elevationStart'] = g.elevationStart;
-                                }
-                                if (g.elevationEnd != null){
-                                  g.properties['elevationEnd']   = g.elevationEnd;
-                                }
-                                if (g.gradientLabel != '---'){
-                                  g.properties['gradient']       = g.gradientLabel;
-                                }
+                                g.properties['shape']    = g.shape;
+                                g.properties['diameter'] = g.diameter;
+                                g.properties['memo']     = g.memo;
+                                g.properties['name']     = g.name;
                               });
                               await _saveToLocalStorage();
                               if (!ctx.mounted) return;
@@ -1583,7 +1498,7 @@ class _MapPageState extends State<MapPage> {
                                   '_blank',
                                 );
                               }
-                              _showSnackBar('保存しました（勾配: ${g.gradientLabel}）');
+                              _showSnackBar('保存しました');
                             },
                             child: const Text('保存'),
                           ),
@@ -1821,19 +1736,16 @@ class _MapPageState extends State<MapPage> {
   }
 
   List<String> _getAllPropertyKeys(GutterLayer layer) {
-    // カテゴリ色分けに意味のないキーを除外
     const excludeKeys = {
       'color', 'strokeWidth', 'showArrow', 'arrowSize',
       'showHeadMark', 'headMarkSize', 'flowReversed',
       'layerId', 'layerVisible',
     };
-    return ({
+    final keys = <String>{
       for (final g in layer.gutters) ...g.properties.keys,
-    }
-      .where((k) => !excludeKeys.contains(k))
-      .toList()
+    };
+    return (keys.where((k) => !excludeKeys.contains(k)).toList()
       ..sort((a, b) {
-        // 日本語ラベルがあるキーを上位に
         final aHas = _kPropKeyLabels.containsKey(a) ? 0 : 1;
         final bHas = _kPropKeyLabels.containsKey(b) ? 0 : 1;
         if (aHas != bHas) return aHas - bHas;
@@ -1911,8 +1823,7 @@ class _MapPageState extends State<MapPage> {
     if (_isShapeKey(key)) {
       return {for (final v in values) v: _shapeNameToColor(v)};
     }
-    final palette = [...Colors.primaries, Colors.brown, Colors.grey, Colors.pink, Colors.cyan];
-    return {for (int i = 0; i < values.length; i++) values[i]: palette[i % palette.length]};
+    return {for (int i = 0; i < values.length; i++) values[i]: _kCategoryPalette[i % _kCategoryPalette.length]};
   }
 
   void _showCategoryStylingDialog(int layerIndex) {
@@ -2245,10 +2156,6 @@ class _MapPageState extends State<MapPage> {
   }
 
   // ================================================================
-  // 流向矢印
-  // ================================================================
-
-  // ================================================================
   // 流向矢印 – ＞型ポリライン（軽量化版）
   // ================================================================
   // 旧実装：Polygon（三角形）を 1本ごとに PolygonLayer へ追加
@@ -2312,7 +2219,7 @@ class _MapPageState extends State<MapPage> {
     final vx = -uy;
     final vy =  ux;
 
-    final halfWidth = sizeMeters * math.tan(15.0 * math.pi / 180);
+    final halfWidth = sizeMeters * _kTan15;
     final bx = -ux * sizeMeters;
     final by = -uy * sizeMeters;
 
@@ -2377,11 +2284,13 @@ class _MapPageState extends State<MapPage> {
   /// ズームレベルに応じて線幅をスケーリングする。
   /// 基準ズーム17 で g.strokeWidth の 2/3 が使われ、
   /// 1段ズームアウトするごとに約29%細くなる（2^0.5 ≒ 1.41 倍ステップ）。
-  static const _kStrokeBaseScale = 2.0 / 3.0; // 初期表示の太さ補正（元の2/3）
-  double _scaledStrokeWidth(double base) {
-    const baseZoom = 17.0;
-    final scale = math.pow(2.0, (_currentZoom - baseZoom) * 0.5).toDouble();
-    return (base * _kStrokeBaseScale * scale).clamp(0.8, base * 6);
+  static const _kStrokeBaseScale = 2.0 / 3.0;
+  double _scaledStrokeWidth(double base) =>
+      (base * _kStrokeBaseScale * _zoomScale).clamp(0.8, base * 6);
+
+  double _scaledStampFontSize() {
+    const baseFontSize = 24.0;
+    return (baseFontSize * _zoomScale).clamp(8.0, baseFontSize * 6);
   }
 
   void _showSnackBar(String message) {
@@ -2393,42 +2302,6 @@ class _MapPageState extends State<MapPage> {
         duration       : const Duration(seconds: 2),
         margin         : const EdgeInsets.fromLTRB(16, 60, 16, 0),
         // 上部に表示するため SnackBarBehavior.floating + 上マージン設定
-      ),
-    );
-  }
-
-  void _showUrlInputDialog({
-    required String title,
-    required String hint,
-    required String actionLabel,
-    required void Function(String url) onSubmit,
-  }) {
-    final ctrl = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title  : Text(title),
-        content: TextField(
-          controller: ctrl,
-          decoration: InputDecoration(hintText: hint),
-          maxLines  : 3,
-          keyboardType: TextInputType.url,
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child    : const Text('キャンセル'),
-          ),
-          FilledButton(
-            onPressed: () {
-              final url = ctrl.text.trim();
-              if (url.isEmpty) return;
-              Navigator.pop(ctx);
-              onSubmit(url);
-            },
-            child: Text(actionLabel),
-          ),
-        ],
       ),
     );
   }
@@ -2447,20 +2320,36 @@ class _MapPageState extends State<MapPage> {
     );
   }
 
+  // モードに対応する色・タイトルを返すヘルパー
+  static const _kModeColors = {
+    _EditMode.add    : Colors.orange,
+    _EditMode.cut    : Colors.purple,
+    _EditMode.delete : Colors.red,
+    _EditMode.stamp  : Colors.teal,
+    _EditMode.none   : Colors.blue,
+  };
+
+  Color get _modeColor => _kModeColors[_currentMode] ?? Colors.blue;
+
+  String get _modeTitle {
+    switch (_currentMode) {
+      case _EditMode.add:
+        return '新規追加モード（${newPoints.length}点）';
+      case _EditMode.cut:
+        return '切断モード';
+      case _EditMode.delete:
+        return '削除モード';
+      case _EditMode.stamp:
+        return '流向矢印モード（${_stamp2PtFirst == null ? "1点目をタップ" : "2点目をタップ"}）';
+      case _EditMode.none:
+        return '側溝踏査マップ';
+    }
+  }
+
     AppBar _buildAppBar() => AppBar(
-    title: Text(
-      isAddingNew
-          ? '新規追加モード（${newPoints.length}点）'
-          : isCutting
-              ? '切断モード'
-              : isDeleting
-                  ? '削除モード'
-                  : isStamp2Pt
-                      ? '流向矢印モード（${_stamp2PtFirst == null ? "1点目をタップ" : "2点目をタップ"}）'
-                      : '側溝踏査マップ',
-      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
-    ),
-    bottom: (!isAddingNew && !isCutting && !isDeleting && !isStamp2Pt)
+    title: Text(_modeTitle,
+        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+    bottom: _currentMode == _EditMode.none
         ? PreferredSize(
             preferredSize: const Size.fromHeight(20),
             child: Padding(
@@ -2474,15 +2363,7 @@ class _MapPageState extends State<MapPage> {
             ),
           )
         : null,
-    backgroundColor: isAddingNew
-        ? Colors.orange
-        : isCutting
-            ? Colors.purple
-            : isDeleting
-                ? Colors.red
-                : isStamp2Pt
-                    ? Colors.teal
-                    : Colors.blue,
+    backgroundColor: _modeColor,
     foregroundColor: Colors.white,
     actions: [
       // ファイルを開く
@@ -2569,33 +2450,24 @@ class _MapPageState extends State<MapPage> {
       _buildMap(),
       // モード中の操作ガイド（画面上部に薄く表示）
             // モード中の操作ガイド（画面上部に薄く表示）
-      if (isAddingNew || isCutting || isDeleting || isStamp2Pt)
+      if (_currentMode != _EditMode.none)
         Positioned(
           top  : 0,
           left : 0,
           right: 0,
           child: Container(
-            color: (isAddingNew
-                    ? Colors.orange
-                    : isCutting
-                        ? Colors.purple
-                        : isDeleting
-                            ? Colors.red
-                            : Colors.teal)
-                .withValues(alpha: 0.85),
+            color: _modeColor.withValues(alpha: 0.85),
             padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
             child: Text(
-              isAddingNew
-                  ? '地図をタップして点を追加 → ✔で保存'
-                  : isCutting
-                      ? 'ラインをタップして切断'
-                      : isDeleting
-                          ? '削除したいラインをタップ'
-                          : isStamp2Pt
-                              ? (_stamp2PtFirst == null
-                                  ? '① 始点（流向の上流側）をタップ'
-                                  : '② 終点（流向の下流側）をタップ → 角度を自動計算します')
-                              : '削除したいラインをタップ',
+              switch (_currentMode) {
+                _EditMode.add    => '地図をタップして点を追加 → ✔で保存',
+                _EditMode.cut    => 'ラインをタップして切断',
+                _EditMode.delete => '削除したいラインをタップ',
+                _EditMode.stamp  => _stamp2PtFirst == null
+                    ? '① 始点（流向の上流側）をタップ'
+                    : '② 終点（流向の下流側）をタップ → 角度を自動計算します',
+                _EditMode.none   => '',
+              },
               textAlign: TextAlign.center,
               style: const TextStyle(color: Colors.white, fontSize: 13),
             ),
@@ -2626,7 +2498,10 @@ class _MapPageState extends State<MapPage> {
       onMapEvent   : (event) {
         final zoom = event.camera.zoom;
         if ((zoom - _currentZoom).abs() > 0.01) {
-          setState(() => _currentZoom = zoom);
+          setState(() {
+            _currentZoom = zoom;
+            _zoomScale   = math.pow(2.0, (zoom - 17.0) * 0.5).toDouble();
+          });
         }
       },
     ),
@@ -2662,9 +2537,7 @@ class _MapPageState extends State<MapPage> {
       // 縁取りほど主張せず、どの路線色でも矢印が見やすくなる。
       PolylineLayer(polylines: _createFlowArrowPolylines(shadow: true)),
       PolylineLayer(polylines: _createFlowArrowPolylines()),
-      ..._createHeadMarkPolylines().map(
-        (p) => PolylineLayer(polylines: [p]),
-      ),
+      PolylineLayer(polylines: _createHeadMarkPolylines()),
       // === 流向矢印スタンプ（→）描画 ===
       MarkerLayer(
         markers: [
@@ -2680,15 +2553,6 @@ class _MapPageState extends State<MapPage> {
   // ================================================================
   // 流向矢印スタンプ Marker 生成（ズーム連動 + タップ編集）
   // ================================================================
-
-  /// ズームに応じたスタンプ矢印のフォントサイズを返す。
-  /// 流向矢印より少し小さめ（baseZoom17 で 24px 相当）。
-  double _scaledStampFontSize() {
-    const baseZoom      = 17.0;
-    const baseFontSize  = 24.0; // 基準サイズ（流向矢印の36より小さめ）
-    final scale = math.pow(2.0, (_currentZoom - baseZoom) * 0.5).toDouble();
-    return (baseFontSize * scale).clamp(8.0, baseFontSize * 6);
-  }
 
   Marker _buildStampMarker(ArrowStamp stamp, GutterLayer layer) {
     final fontSize   = _scaledStampFontSize();
@@ -2969,7 +2833,7 @@ class _MapPageState extends State<MapPage> {
           icon     : Icons.delete_outline,
           tooltip  : '削除モード',
           onTap    : _toggleDeleteMode,
-          color    : isDeleting ? Colors.red : Colors.white,
+          color    : isDeleting ? Colors.red   : Colors.white,
           iconColor: isDeleting ? Colors.white : Colors.red,
           mini     : true,
         ),
@@ -2981,19 +2845,19 @@ class _MapPageState extends State<MapPage> {
           tooltip  : '切断モード',
           onTap    : _toggleCutMode,
           color    : isCutting ? Colors.purple : Colors.white,
-          iconColor: isCutting ? Colors.white : Colors.purple,
+          iconColor: isCutting ? Colors.white  : Colors.purple,
           mini     : true,
         ),
         const SizedBox(height: 6),
 
         // 矢印スタンプモード（2点指定）
         _roundFab(
-          icon: Icons.straighten,
-          tooltip: '流向矢印追加（2点指定）',
-          onTap: _toggleStamp2PtMode,
-          color: isStamp2Pt ? Colors.teal.shade700 : Colors.white,
-          iconColor: isStamp2Pt ? Colors.white : Colors.teal.shade700,
-          mini: true,
+          icon     : Icons.straighten,
+          tooltip  : '流向矢印追加（2点指定）',
+          onTap    : _toggleStamp2PtMode,
+          color    : isStamp2Pt ? Colors.teal.shade700 : Colors.white,
+          iconColor: isStamp2Pt ? Colors.white          : Colors.teal.shade700,
+          mini     : true,
         ),
 
         // 追加モード中は「保存」ボタンも表示
@@ -3048,40 +2912,6 @@ class _MapPageState extends State<MapPage> {
         elevation      : 2,
         onPressed      : onTap,
         child          : Icon(icon, size: mini ? 20 : 24),
-      );
-
-  // 展開メニューの行アイテム
-  Widget _menuRow({
-    required String label,
-    required IconData icon,
-    required VoidCallback onTap,
-  }) =>
-      Padding(
-        padding: const EdgeInsets.symmetric(vertical: 3),
-        child: Row(
-          mainAxisSize    : MainAxisSize.min,
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: [
-            Container(
-              padding   : const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color        : Colors.black54,
-                borderRadius : BorderRadius.circular(8),
-              ),
-              child: Text(label,
-                  style: const TextStyle(color: Colors.white, fontSize: 13)),
-            ),
-            const SizedBox(width: 8),
-            FloatingActionButton.small(
-              heroTag        : label,
-              backgroundColor: Colors.white,
-              foregroundColor: Colors.blueGrey.shade800,
-              elevation      : 2,
-              onPressed      : onTap,
-              child          : Icon(icon, size: 20),
-            ),
-          ],
-        ),
       );
 
   // ================================================================
