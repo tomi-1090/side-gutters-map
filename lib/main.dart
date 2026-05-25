@@ -91,8 +91,8 @@ const _kPropKeyLabels = <String, String>{
   'layerVisible'   : 'レイヤー表示',
   'color'          : '色',
   'strokeWidth'    : '線幅',
-  'showArrow'      : '流向矢印',
-  'arrowSize'      : '矢印サイズ',
+  'showArrow'      : '流向矢印（ライン末端）',
+  'arrowSize'      : '流向矢印サイズ',
   'showHeadMark'   : '最上流マーク',
   'headMarkSize'   : 'マークサイズ',
   // 外部GeoJSONでよく使われる日本語キーもそのまま通す
@@ -135,9 +135,9 @@ class ArrowStamp {
       'id'       : id,
       'type'     : 'arrow_stamp',
       'angleDeg' : angleDeg,
-      'color'    : Colors.green.toARGB32(), // 緑固定
-      if (layerName.isNotEmpty) 'layer'   : layerName,
-      if (layerId.isNotEmpty)   'layerId' : layerId,
+      'color'    : Colors.green.toARGB32(),
+      if (layerName.isNotEmpty) 'layer'  : layerName,
+      if (layerId.isNotEmpty)   'layerId': layerId,
     },
   };
 
@@ -302,7 +302,7 @@ class _MapPageState extends State<MapPage> {
   final List<String> _redoStack = [];
 
   int    _newGutterCounter = 1;
-  String currentTile       = 'google_photo'; // ① デフォルトを航空写真に変更
+  String currentTile       = 'google_photo'; // デフォルトは航空写真
   String? _sharedGeoJsonUrl;
 
   // ズームレベルに応じた線幅スケーリング用
@@ -499,7 +499,7 @@ class _MapPageState extends State<MapPage> {
     _showSnackBar(isShared ? '共有URLからデータを読み込み中...' : 'GeoJSONを読み込み中...');
 
     try {
-      // ★★★ Private Blob対応：cleanUrlを作らない（トークンが必要） ★★★
+      // Private Blob対応：cleanUrlを作らない（トークンが必要）
       final response = await http.get(Uri.parse(rawUrl));
 
       if (response.statusCode != 200) {
@@ -587,10 +587,15 @@ class _MapPageState extends State<MapPage> {
                       '開渠'  : Colors.blue,
                       '未分類': Colors.grey,
                     };
+              // ⑤ layerStyles から visible を復元（保存されていれば）
+              final bool layerVisible = styleEntry != null
+                  ? (styleEntry['visible'] as bool? ?? true)
+                  : true;
 
               layers.add(GutterLayer(
                 id            : entry.key,
                 name          : layerNames[entry.key] ?? '共有データ',
+                visible       : layerVisible,
                 gutters       : gutters,
                 stamps        : stamps,
                 categoryKey   : categoryKey,
@@ -711,8 +716,8 @@ class _MapPageState extends State<MapPage> {
     }
   }
 
-    // ================================================================
-  // GeoJSON アップロード（全レイヤー共有）→ Vercel Blob版
+  // ================================================================
+  // GeoJSON アップロード（全レイヤー共有）
   // ================================================================
 
   /// 共通アップロード処理。[forceNewId] が true なら必ず新しいIDを発行する。
@@ -723,7 +728,7 @@ class _MapPageState extends State<MapPage> {
     }
 
     try {
-      // ③ shareId の決定
+      // shareId の決定
       String shareId;
       if (forceNewId) {
         // 新規URL発行：必ず新しいIDを生成（既存データは別URLのまま残る）
@@ -766,7 +771,7 @@ class _MapPageState extends State<MapPage> {
         'gutters_count': features.length,
       };
 
-      // ★★★ ここをBlob用のAPIに変更 ★★★
+      // Blob用APIにアップロード
       final apiUrl = '${web.window.location.origin}/api/uploadToBlob';
 
       final response = await http.post(
@@ -927,7 +932,7 @@ class _MapPageState extends State<MapPage> {
   // モード切り替え
   // ================================================================
 
-    void _toggleAddMode() => setState(() {
+  void _toggleAddMode() => setState(() {
     isAddingNew = !isAddingNew;
 
     if (isAddingNew) {
@@ -961,7 +966,7 @@ class _MapPageState extends State<MapPage> {
     }
   });
 
-    void _toggleStamp2PtMode() {
+  void _toggleStamp2PtMode() {
     setState(() {
       isStamp2Pt = !isStamp2Pt;
 
@@ -1012,7 +1017,7 @@ class _MapPageState extends State<MapPage> {
   // マップタップ処理
   // ================================================================
 
-    void _addPoint(TapPosition _, LatLng point) {
+  void _addPoint(TapPosition _, LatLng point) {
     final layer = _currentLayer;
     if (layer == null) {
       _showSnackBar('レイヤーがありません。先にGeoJSONを読み込んでください。');
@@ -1278,7 +1283,7 @@ class _MapPageState extends State<MapPage> {
   }
 
   // ================================================================
-  // 2点指定スタンプ（方向・勾配を自動計算）
+  // 2点指定スタンプ（方向を自動計算）
   // ================================================================
 
   void _handleStamp2PtTap(LatLng point) {
@@ -1294,7 +1299,7 @@ class _MapPageState extends State<MapPage> {
     }
   }
 
-      void _createFlowArrow(LatLng start, LatLng end) {
+  void _createFlowArrow(LatLng start, LatLng end) {
     if (_currentLayer == null) {
       _showSnackBar('レイヤーが選択されていません');
       return;
@@ -1320,7 +1325,7 @@ class _MapPageState extends State<MapPage> {
       angleDeg: angleDeg,
     );
 
-    // ★ 矢印1本追加ごとにUndo状態を記録（③ 1工程ずつ戻れるように）
+    // 矢印1本追加ごとにUndo状態を記録
     _saveStateForUndo();
 
     setState(() {
@@ -2032,7 +2037,7 @@ class _MapPageState extends State<MapPage> {
     double bulkArrowSize = layer.gutters.first.arrowSize;
     bool   bulkShowHead  = layer.gutters.first.showHeadMark;
     double bulkHeadSize  = layer.gutters.first.headMarkSize;
-    // ④ 一括色：null = 変更しない
+    // 一括色：null = 変更しない
     Color? bulkColor;
 
     showDialog(
@@ -2371,43 +2376,6 @@ class _MapPageState extends State<MapPage> {
       ),
     );
   }
-
-  void _showUrlInputDialog({
-    required String title,
-    required String hint,
-    required String actionLabel,
-    required void Function(String url) onSubmit,
-  }) {
-    final ctrl = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title  : Text(title),
-        content: TextField(
-          controller: ctrl,
-          decoration: InputDecoration(hintText: hint),
-          maxLines  : 3,
-          keyboardType: TextInputType.url,
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child    : const Text('キャンセル'),
-          ),
-          FilledButton(
-            onPressed: () {
-              final url = ctrl.text.trim();
-              if (url.isEmpty) return;
-              Navigator.pop(ctx);
-              onSubmit(url);
-            },
-            child: Text(actionLabel),
-          ),
-        ],
-      ),
-    );
-  }
-
   // ================================================================
   // UI
   // ================================================================
@@ -2422,7 +2390,7 @@ class _MapPageState extends State<MapPage> {
     );
   }
 
-    AppBar _buildAppBar() => AppBar(
+  AppBar _buildAppBar() => AppBar(
     title: Text(
       isAddingNew
           ? '新規追加モード（${newPoints.length}点）'
@@ -2543,7 +2511,6 @@ class _MapPageState extends State<MapPage> {
     children: [
       _buildMap(),
       // モード中の操作ガイド（画面上部に薄く表示）
-            // モード中の操作ガイド（画面上部に薄く表示）
       if (isAddingNew || isCutting || isDeleting || isStamp2Pt)
         Positioned(
           top  : 0,
@@ -2570,7 +2537,7 @@ class _MapPageState extends State<MapPage> {
                               ? (_stamp2PtFirst == null
                                   ? '① 始点（高い側）をタップ'
                                   : '② 終点（低い側）をタップ → 角度を自動計算します')
-                              : '削除したいラインをタップ',
+                              : '',
               textAlign: TextAlign.center,
               style: const TextStyle(color: Colors.white, fontSize: 13),
             ),
@@ -2659,7 +2626,7 @@ class _MapPageState extends State<MapPage> {
   /// ズームに応じた勾配矢印スタンプのフォントサイズを返す（baseZoom17 で 24px 相当）。
   double _scaledStampFontSize() {
     const baseZoom      = 17.0;
-    const baseFontSize  = 24.0; // 基準サイズ（流向矢印の36より小さめ）
+    const baseFontSize  = 24.0; // 基準サイズ（流向矢印より小さめ）
     final scale = math.pow(2.0, (_currentZoom - baseZoom) * 0.5).toDouble();
     return (baseFontSize * scale).clamp(8.0, baseFontSize * 6);
   }
@@ -3022,40 +2989,6 @@ class _MapPageState extends State<MapPage> {
         elevation      : 2,
         onPressed      : onTap,
         child          : Icon(icon, size: mini ? 20 : 24),
-      );
-
-  // 展開メニューの行アイテム
-  Widget _menuRow({
-    required String label,
-    required IconData icon,
-    required VoidCallback onTap,
-  }) =>
-      Padding(
-        padding: const EdgeInsets.symmetric(vertical: 3),
-        child: Row(
-          mainAxisSize    : MainAxisSize.min,
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: [
-            Container(
-              padding   : const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color        : Colors.black54,
-                borderRadius : BorderRadius.circular(8),
-              ),
-              child: Text(label,
-                  style: const TextStyle(color: Colors.white, fontSize: 13)),
-            ),
-            const SizedBox(width: 8),
-            FloatingActionButton.small(
-              heroTag        : label,
-              backgroundColor: Colors.white,
-              foregroundColor: Colors.blueGrey.shade800,
-              elevation      : 2,
-              onPressed      : onTap,
-              child          : Icon(icon, size: 20),
-            ),
-          ],
-        ),
       );
 
   // ================================================================
