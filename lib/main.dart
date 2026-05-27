@@ -21,7 +21,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: '側溝踏査マップ',
+      title: '現場踏査GIS',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
         useMaterial3: true,
@@ -86,9 +86,9 @@ const _kPropKeyLabels = <String, String>{
   'memo'           : 'メモ',
   'name'           : '名称',
   'id'             : 'ID',
-  'layer'          : 'レイヤー名',
-  'layerId'        : 'レイヤーID',
-  'layerVisible'   : 'レイヤー表示',
+  'layer'          : 'レイヤ名',
+  'layerId'        : 'レイヤID',
+  'layerVisible'   : 'レイヤ表示',
   'color'          : '色',
   'strokeWidth'    : '線幅',
   'showArrow'      : '流向矢印（ライン末端）',
@@ -121,7 +121,7 @@ class ArrowStamp {
     'angleDeg': angleDeg,
   };
 
-  /// GeoJSON Feature（Point）として出力
+  /// GeoJSON Feature（Point）として出力（共有用：全属性）
   Map<String, dynamic> toGeoJsonFeature({String layerName = '', String layerId = ''}) => {
     'type'    : 'Feature',
     'geometry': {
@@ -138,6 +138,24 @@ class ArrowStamp {
       'color'    : Colors.green.toARGB32(),
       if (layerName.isNotEmpty) 'layer'  : layerName,
       if (layerId.isNotEmpty)   'layerId': layerId,
+    },
+  };
+
+  /// GeoJSON Feature（Point）として出力（エクスポート用：必要属性のみ）
+  Map<String, dynamic> toGeoJsonExportFeature({String layerName = ''}) => {
+    'type'    : 'Feature',
+    'geometry': {
+      'type'       : 'Point',
+      'coordinates': [
+        double.parse(position.longitude.toStringAsFixed(6)),
+        double.parse(position.latitude.toStringAsFixed(6)),
+      ],
+    },
+    'properties': {
+      'id'      : id,
+      'type'    : 'arrow_stamp',
+      'angleDeg': angleDeg,
+      if (layerName.isNotEmpty) 'layer': layerName,
     },
   };
 
@@ -530,7 +548,7 @@ class _MapPageState extends State<MapPage> {
                     ?.containsKey('layer') == true);
 
         if (hasLayerMeta) {
-          // レイヤーごとにfeatureを振り分け（ラインとスタンプ両方）
+          // レイヤごとにfeatureを振り分け（ラインとスタンプ両方）
           final layerMap      = <String, List<dynamic>>{};
           final layerNames    = <String, String>{};
           final stampLayerMap = <String, List<dynamic>>{};
@@ -567,7 +585,7 @@ class _MapPageState extends State<MapPage> {
               final gutters = _parseGeoJsonFeatures(entry.value);
               if (gutters.isEmpty) continue;
               total += gutters.length;
-              // 同レイヤーのArrowStampも復元
+              // 同レイヤのArrowStampも復元
               final stamps = _parseArrowStampFeatures(
                 stampLayerMap[entry.key] ?? [],
               );
@@ -606,7 +624,7 @@ class _MapPageState extends State<MapPage> {
 
           if (layers.isNotEmpty) _showAllGutters();
           await _saveToLocalStorage();
-          _showSnackBar('$total本の側溝を${layerMap.length}レイヤーで読み込みました');
+          _showSnackBar('$total本の側溝を${layerMap.length}レイヤで読み込みました');
           return;
         }
       }
@@ -674,7 +692,7 @@ class _MapPageState extends State<MapPage> {
         return;
       }
 
-      _showSnackBar('$totalAdded 件を $layerAdded レイヤーに追加しました');
+      _showSnackBar('$totalAdded 件を $layerAdded レイヤに追加しました');
 
       Future.delayed(const Duration(milliseconds: 300), () {
         if (mounted) _scaffoldKey.currentState?.openEndDrawer();
@@ -690,7 +708,7 @@ class _MapPageState extends State<MapPage> {
 
   void _exportGeoJSON() {
     try {
-      final features = _buildFeatureList(withLayerMeta: false);
+      final features = _buildExportFeatureList();
       if (features.isEmpty) {
         _showSnackBar('エクスポートするデータがありません');
         return;
@@ -705,7 +723,7 @@ class _MapPageState extends State<MapPage> {
 
       final anchor = web.HTMLAnchorElement()
         ..href     = 'data:application/geo+json;base64,${base64Encode(utf8.encode(jsonStr))}'
-        ..download = 'sideGutters_${DateTime.now().toIso8601String().substring(0, 10)}.geojson';
+        ..download = 'fieldGIS_${DateTime.now().toIso8601String().substring(0, 10)}.geojson';
       web.document.body!.append(anchor);
       anchor.click();
       anchor.remove();
@@ -716,8 +734,46 @@ class _MapPageState extends State<MapPage> {
     }
   }
 
+  /// ダウンロード用エクスポート専用：必要属性のみ出力してデータ軽量化
+  /// ラインは レイヤ名・名称・断面形状・口径・メモ・流向矢印・最上流マーク のみ
+  /// 勾配矢印ポイントは id・type・angleDeg・レイヤ名 のみ
+  List<Map<String, dynamic>> _buildExportFeatureList() {
+    final lineFeatures = [
+      for (final layer in layers)
+        for (final g in layer.gutters)
+          {
+            'type'    : 'Feature',
+            'geometry': {
+              'type'       : 'LineString',
+              'coordinates': g.points.map((p) => [
+                double.parse(p.longitude.toStringAsFixed(6)),
+                double.parse(p.latitude.toStringAsFixed(6)),
+              ]).toList(),
+            },
+            'properties': {
+              'layer'       : layer.name,
+              'name'        : g.name,
+              'shape'       : g.shape,
+              'diameter'    : g.diameter,
+              'memo'        : g.memo,
+              'showArrow'   : g.showArrow,
+              'flowReversed': g.flowReversed,
+              'showHeadMark': g.showHeadMark,
+            },
+          },
+    ];
+
+    final stampFeatures = [
+      for (final layer in layers)
+        for (final s in layer.stamps)
+          s.toGeoJsonExportFeature(layerName: layer.name),
+    ];
+
+    return [...lineFeatures, ...stampFeatures];
+  }
+
   // ================================================================
-  // GeoJSON アップロード（全レイヤー共有）
+  // GeoJSON アップロード（全レイヤ共有）
   // ================================================================
 
   /// 共通アップロード処理。[forceNewId] が true なら必ず新しいIDを発行する。
@@ -750,7 +806,7 @@ class _MapPageState extends State<MapPage> {
       }
 
       final features = _buildFeatureList(withLayerMeta: true);
-      // レイヤーのスタイル設定（categoryKey・categoryColors）を別途保存
+      // レイヤのスタイル設定（categoryKey・categoryColors）を別途保存
       // FeatureCollection のトップレベルに埋め込むことで読み込み時に復元できる
       final layerStyles = {
         for (final layer in layers)
@@ -917,7 +973,7 @@ class _MapPageState extends State<MapPage> {
      // 矢印スタンプ（Pointデータ）を追加
     final stampFeatures = [
       for (final layer in layers)
-        if (withLayerMeta || layer.visible)  // 共有時は全レイヤー含む
+        if (withLayerMeta || layer.visible)  // 共有時は全レイヤ含む
           for (final s in layer.stamps)
             s.toGeoJsonFeature(
               layerName: withLayerMeta ? layer.name : '',
@@ -1020,7 +1076,7 @@ class _MapPageState extends State<MapPage> {
   void _addPoint(TapPosition _, LatLng point) {
     final layer = _currentLayer;
     if (layer == null) {
-      _showSnackBar('レイヤーがありません。先にGeoJSONを読み込んでください。');
+      _showSnackBar('レイヤがありません。先にGeoJSONを読み込んでください。');
       return;
     }
 
@@ -1190,7 +1246,7 @@ class _MapPageState extends State<MapPage> {
     return LatLng(a.latitude + tc * dy, a.longitude + tc * dx);
   }
 
-  /// 全レイヤーの端点・折れ点から最近傍を探してスナップ。
+  /// 全レイヤの端点・折れ点から最近傍を探してスナップ。
   /// _kSnapRadiusM 以内に点があればその座標を返し、なければ null。
   LatLng? _trySnap(LatLng tap) {
     if (!_snapEnabled) return null;
@@ -1240,7 +1296,7 @@ class _MapPageState extends State<MapPage> {
     }
     final layer = _currentLayer;
     if (layer == null) {
-      _showSnackBar('レイヤーが選択されていません');
+      _showSnackBar('レイヤが選択されていません');
       return;
     }
 
@@ -1301,7 +1357,7 @@ class _MapPageState extends State<MapPage> {
 
   void _createFlowArrow(LatLng start, LatLng end) {
     if (_currentLayer == null) {
-      _showSnackBar('レイヤーが選択されていません');
+      _showSnackBar('レイヤが選択されていません');
       return;
     }
 
@@ -1702,7 +1758,7 @@ class _MapPageState extends State<MapPage> {
   }
 
   // ================================================================
-  // レイヤー管理
+  // レイヤ管理
   // ================================================================
 
   void _renameLayer(int index) {
@@ -1710,7 +1766,7 @@ class _MapPageState extends State<MapPage> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title  : const Text('レイヤー名変更'),
+        title  : const Text('レイヤ名変更'),
         content: TextField(controller: ctrl),
         actions: [
           TextButton(
@@ -1735,12 +1791,12 @@ class _MapPageState extends State<MapPage> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title  : const Text('新規レイヤー作成'),
+        title  : const Text('新規レイヤ作成'),
         content: TextField(
           controller : ctrl,
           autofocus  : true,
           decoration : const InputDecoration(
-            labelText: 'レイヤー名',
+            labelText: 'レイヤ名',
             hintText : '例）区域A・幹線など',
             border   : OutlineInputBorder(),
             isDense  : true,
@@ -1855,7 +1911,7 @@ class _MapPageState extends State<MapPage> {
   /// - '---' / 空文字 → '未分類' に正規化
   /// - shape キーは _kShapeCategories を固定ベースとして使い、
   ///   データに存在する追加値も末尾に補完する
-  /// - 'layer' キーはレイヤー順、それ以外はアルファベット順
+  /// - 'layer' キーはレイヤ順、それ以外はアルファベット順
   List<String> _getUniqueValues(GutterLayer layer, String? key) {
     if (key == null) return [];
 
@@ -1875,7 +1931,7 @@ class _MapPageState extends State<MapPage> {
 
     final values = fromData.toList();
     if (key == 'layer') {
-      // レイヤー登録順にソート
+      // レイヤ登録順にソート
       final order = {for (int i = 0; i < layers.length; i++) layers[i].name: i};
       values.sort((a, b) {
         final ia = order[a] ?? layers.length;
@@ -2021,13 +2077,13 @@ class _MapPageState extends State<MapPage> {
   }
 
   // ================================================================
-  // 一括スタイル変更（レイヤー内の全路線）
+  // 一括スタイル変更（レイヤ内の全路線）
   // ================================================================
 
   void _showBulkStyleDialog(int layerIndex) {
     final layer = layers[layerIndex];
     if (layer.gutters.isEmpty) {
-      _showSnackBar('このレイヤーに路線がありません');
+      _showSnackBar('このレイヤに路線がありません');
       return;
     }
 
@@ -2242,7 +2298,7 @@ class _MapPageState extends State<MapPage> {
 
   /// 流向矢印ポリラインを返す。
   /// [shadow] = true のとき、視認性向上用の白いアウトライン用ポリラインを返す。
-  /// 白アウトラインは矢印本体より2px太くし、本体の下レイヤーに描くことで
+  /// 白アウトラインは矢印本体より2px太くし、本体の下レイヤに描くことで
   /// 路線色と被っても読めるようにする（縁取りとは異なり控えめな効果）。
   List<Polyline> _createFlowArrowPolylines({bool shadow = false}) {
     final result = <Polyline>[];
@@ -2400,7 +2456,7 @@ class _MapPageState extends State<MapPage> {
                   ? '削除モード'
                   : isStamp2Pt
                       ? '勾配矢印モード（${_stamp2PtFirst == null ? "1点目をタップ" : "2点目をタップ"}）'
-                      : '側溝踏査マップ',
+                      : '現場踏査GIS',
       style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
     ),
     bottom: (!isAddingNew && !isCutting && !isDeleting && !isStamp2Pt)
@@ -2410,8 +2466,8 @@ class _MapPageState extends State<MapPage> {
               padding: const EdgeInsets.only(bottom: 5),
               child: Text(
                 _currentLayer != null
-                    ? '編集中レイヤー：${_currentLayer!.name}'
-                    : 'レイヤー未選択',
+                    ? '編集中レイヤ：${_currentLayer!.name}'
+                    : 'レイヤ未選択',
                 style: const TextStyle(color: Colors.white70, fontSize: 12),
               ),
             ),
@@ -2501,7 +2557,7 @@ class _MapPageState extends State<MapPage> {
       // メニュー（ドロワー）
       IconButton(
         icon     : const Icon(Icons.menu),
-        tooltip  : 'レイヤー管理',
+        tooltip  : 'レイヤ管理',
         onPressed: () => _scaffoldKey.currentState?.openEndDrawer(),
       ),
     ],
@@ -2549,7 +2605,7 @@ class _MapPageState extends State<MapPage> {
         bottom: 24,
         child : _buildFabColumn(),
       ),
-      // 左下：選択中レイヤーバッジ（常時表示）
+      // 左下：選択中レイヤバッジ（常時表示）
       Positioned(
         left  : 12,
         bottom: 24,
@@ -2824,8 +2880,8 @@ class _MapPageState extends State<MapPage> {
 
   Widget _buildLayerBadge() {
     final layer = _currentLayer;
-    // レイヤーなし・未選択
-    final label  = layer != null ? layer.name : 'レイヤー未選択';
+    // レイヤなし・未選択
+    final label  = layer != null ? layer.name : 'レイヤ未選択';
     final isNone = layer == null;
 
     return GestureDetector(
@@ -2992,7 +3048,7 @@ class _MapPageState extends State<MapPage> {
       );
 
   // ================================================================
-  // ドロワー（レイヤー管理）
+  // ドロワー（レイヤ管理）
   // ================================================================
 
   Widget _buildDrawer() => Drawer(
@@ -3004,17 +3060,17 @@ class _MapPageState extends State<MapPage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisAlignment : MainAxisAlignment.end,
             children: [
-              const Text('レイヤー管理',
+              const Text('レイヤ管理',
                   style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
               const SizedBox(height: 4),
-              Text('${layers.length} レイヤー',
+              Text('${layers.length} レイヤ',
                   style: const TextStyle(color: Colors.white70, fontSize: 13)),
             ],
           ),
         ),
         Expanded(
           child: layers.isEmpty
-              ? const Center(child: Text('レイヤーがありません\n上部のフォルダアイコンから\nGeoJSONファイルを開いてください',
+              ? const Center(child: Text('レイヤがありません\n上部のフォルダアイコンから\nGeoJSONファイルを開いてください',
                   textAlign: TextAlign.center))
               : ReorderableListView.builder(
                   itemCount  : layers.length,
@@ -3110,7 +3166,7 @@ class _MapPageState extends State<MapPage> {
                             onPressed: () => showDialog(
                               context: context,
                               builder: (dlgCtx) => AlertDialog(
-                                title  : const Text('レイヤー削除'),
+                                title  : const Text('レイヤ削除'),
                                 content: Text('「${layer.name}」を削除しますか？'),
                                 actions: [
                                   TextButton(
@@ -3147,7 +3203,7 @@ class _MapPageState extends State<MapPage> {
         SafeArea(
           child: ListTile(
             leading: const Icon(Icons.add_circle_outline),
-            title  : const Text('新しい空レイヤー作成'),
+            title  : const Text('新しい空レイヤ作成'),
             onTap  : () {
               // ドロワーを閉じてからダイアログを出すと context が破棄されるため
               // ドロワーを閉じずにダイアログを先に出す
