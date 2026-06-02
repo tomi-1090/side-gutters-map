@@ -121,7 +121,7 @@ class ArrowStamp {
     'angleDeg': angleDeg,
   };
 
-  /// GeoJSON Feature（Point）として出力（共有用：全属性）
+  /// GeoJSON Feature（Point）として出力
   Map<String, dynamic> toGeoJsonFeature({String layerName = '', String layerId = ''}) => {
     'type'    : 'Feature',
     'geometry': {
@@ -138,24 +138,6 @@ class ArrowStamp {
       'color'    : Colors.green.toARGB32(),
       if (layerName.isNotEmpty) 'layer'  : layerName,
       if (layerId.isNotEmpty)   'layerId': layerId,
-    },
-  };
-
-  /// GeoJSON Feature（Point）として出力（エクスポート用：必要属性のみ）
-  Map<String, dynamic> toGeoJsonExportFeature({String layerName = ''}) => {
-    'type'    : 'Feature',
-    'geometry': {
-      'type'       : 'Point',
-      'coordinates': [
-        double.parse(position.longitude.toStringAsFixed(6)),
-        double.parse(position.latitude.toStringAsFixed(6)),
-      ],
-    },
-    'properties': {
-      'id'      : id,
-      'type'    : 'arrow_stamp',
-      'angleDeg': angleDeg,
-      if (layerName.isNotEmpty) 'layer': layerName,
     },
   };
 
@@ -329,6 +311,13 @@ class _MapPageState extends State<MapPage> {
   // 端点スナップ ON/OFF（変更しないため final）
   final bool _snapEnabled = true;
   static const _kSnapRadiusM = 3.0; // スナップ判定距離（メートル）
+
+  // 現在地ピン
+  LatLng? _currentPosition;
+
+  // 複数選択モード
+  bool _isMultiSelect = false;
+  final Set<String> _selectedGutterIds = {}; // 選択中のGutter ID
 
   // ================================================================
   // 初期化
@@ -548,7 +537,7 @@ class _MapPageState extends State<MapPage> {
                     ?.containsKey('layer') == true);
 
         if (hasLayerMeta) {
-          // レイヤごとにfeatureを振り分け（ラインとスタンプ両方）
+          // レイヤーごとにfeatureを振り分け（ラインとスタンプ両方）
           final layerMap      = <String, List<dynamic>>{};
           final layerNames    = <String, String>{};
           final stampLayerMap = <String, List<dynamic>>{};
@@ -585,7 +574,7 @@ class _MapPageState extends State<MapPage> {
               final gutters = _parseGeoJsonFeatures(entry.value);
               if (gutters.isEmpty) continue;
               total += gutters.length;
-              // 同レイヤのArrowStampも復元
+              // 同レイヤーのArrowStampも復元
               final stamps = _parseArrowStampFeatures(
                 stampLayerMap[entry.key] ?? [],
               );
@@ -708,7 +697,7 @@ class _MapPageState extends State<MapPage> {
 
   void _exportGeoJSON() {
     try {
-      final features = _buildExportFeatureList();
+      final features = _buildFeatureList(withLayerMeta: false);
       if (features.isEmpty) {
         _showSnackBar('エクスポートするデータがありません');
         return;
@@ -723,7 +712,7 @@ class _MapPageState extends State<MapPage> {
 
       final anchor = web.HTMLAnchorElement()
         ..href     = 'data:application/geo+json;base64,${base64Encode(utf8.encode(jsonStr))}'
-        ..download = 'fieldGIS_${DateTime.now().toIso8601String().substring(0, 10)}.geojson';
+        ..download = 'sideGutters_${DateTime.now().toIso8601String().substring(0, 10)}.geojson';
       web.document.body!.append(anchor);
       anchor.click();
       anchor.remove();
@@ -734,46 +723,8 @@ class _MapPageState extends State<MapPage> {
     }
   }
 
-  /// ダウンロード用エクスポート専用：必要属性のみ出力してデータ軽量化
-  /// ラインは レイヤ名・名称・断面形状・口径・メモ・流向矢印・最上流マーク のみ
-  /// 勾配矢印ポイントは id・type・angleDeg・レイヤ名 のみ
-  List<Map<String, dynamic>> _buildExportFeatureList() {
-    final lineFeatures = [
-      for (final layer in layers)
-        for (final g in layer.gutters)
-          {
-            'type'    : 'Feature',
-            'geometry': {
-              'type'       : 'LineString',
-              'coordinates': g.points.map((p) => [
-                double.parse(p.longitude.toStringAsFixed(6)),
-                double.parse(p.latitude.toStringAsFixed(6)),
-              ]).toList(),
-            },
-            'properties': {
-              'layer'       : layer.name,
-              'name'        : g.name,
-              'shape'       : g.shape,
-              'diameter'    : g.diameter,
-              'memo'        : g.memo,
-              'showArrow'   : g.showArrow,
-              'flowReversed': g.flowReversed,
-              'showHeadMark': g.showHeadMark,
-            },
-          },
-    ];
-
-    final stampFeatures = [
-      for (final layer in layers)
-        for (final s in layer.stamps)
-          s.toGeoJsonExportFeature(layerName: layer.name),
-    ];
-
-    return [...lineFeatures, ...stampFeatures];
-  }
-
   // ================================================================
-  // GeoJSON アップロード（全レイヤ共有）
+  // GeoJSON アップロード（全レイヤー共有）
   // ================================================================
 
   /// 共通アップロード処理。[forceNewId] が true なら必ず新しいIDを発行する。
@@ -806,7 +757,7 @@ class _MapPageState extends State<MapPage> {
       }
 
       final features = _buildFeatureList(withLayerMeta: true);
-      // レイヤのスタイル設定（categoryKey・categoryColors）を別途保存
+      // レイヤーのスタイル設定（categoryKey・categoryColors）を別途保存
       // FeatureCollection のトップレベルに埋め込むことで読み込み時に復元できる
       final layerStyles = {
         for (final layer in layers)
@@ -973,7 +924,7 @@ class _MapPageState extends State<MapPage> {
      // 矢印スタンプ（Pointデータ）を追加
     final stampFeatures = [
       for (final layer in layers)
-        if (withLayerMeta || layer.visible)  // 共有時は全レイヤ含む
+        if (withLayerMeta || layer.visible)  // 共有時は全レイヤー含む
           for (final s in layer.stamps)
             s.toGeoJsonFeature(
               layerName: withLayerMeta ? layer.name : '',
@@ -1110,9 +1061,47 @@ class _MapPageState extends State<MapPage> {
       return;
     }
 
+    // 複数選択モード：全レイヤから近くのラインを選択/解除
+    if (_isMultiSelect) {
+      Gutter? nearest;
+      double  bestDist = double.infinity;
+      for (final layer in layers) {
+        if (!layer.visible) continue;
+        final g = _findNearestGutterInLayer(point, layer);
+        if (g == null) continue;
+        // 距離を再計算して最近傍を確定
+        for (int j = 0; j < g.points.length - 1; j++) {
+          final dist = _distance.distance(
+            point,
+            _projectOnSegment(point, g.points[j], g.points[j + 1]),
+          );
+          if (dist < bestDist) {
+            bestDist = dist;
+            nearest  = g;
+          }
+        }
+      }
+      if (nearest != null) {
+        setState(() {
+          if (_selectedGutterIds.contains(nearest!.id)) {
+            _selectedGutterIds.remove(nearest.id);
+          } else {
+            _selectedGutterIds.add(nearest.id);
+          }
+        });
+        _showSnackBar(
+          _selectedGutterIds.contains(nearest.id)
+            ? '「${nearest.name.isNotEmpty ? nearest.name : nearest.id}」を選択（計${_selectedGutterIds.length}件）'
+            : '「${nearest.name.isNotEmpty ? nearest.name : nearest.id}」の選択を解除（計${_selectedGutterIds.length}件）',
+        );
+      }
+      return;
+    }
+
     if (isCutting) {
       _cutLineAtPoint(point, layer);
     } else {
+      // 通常モード：長押しで複数選択開始できるよう、タップは単体編集
       final nearest = _findNearestGutterInLayer(point, layer);
       if (nearest != null) _showEditForm(nearest);
     }
@@ -1246,7 +1235,7 @@ class _MapPageState extends State<MapPage> {
     return LatLng(a.latitude + tc * dy, a.longitude + tc * dx);
   }
 
-  /// 全レイヤの端点・折れ点から最近傍を探してスナップ。
+  /// 全レイヤーの端点・折れ点から最近傍を探してスナップ。
   /// _kSnapRadiusM 以内に点があればその座標を返し、なければ null。
   LatLng? _trySnap(LatLng tap) {
     if (!_snapEnabled) return null;
@@ -1300,40 +1289,105 @@ class _MapPageState extends State<MapPage> {
       return;
     }
 
-    final ctrl = TextEditingController(text: '');
+    final nameCtrl  = TextEditingController(text: '');
+    final shapeCtrl = TextEditingController(text: '---');
+    final diamCtrl  = TextEditingController(text: '---');
+    final memCtrl   = TextEditingController(text: '');
+
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title  : const Text('新規側溝保存'),
-        content: TextField(
-          controller: ctrl,
-          decoration: const InputDecoration(labelText: '側溝名'),
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setS) => AlertDialog(
+          title  : const Text('新規側溝保存'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize      : MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TextField(
+                    controller: nameCtrl,
+                    decoration: const InputDecoration(
+                      labelText: '側溝名',
+                      border   : OutlineInputBorder(),
+                      isDense  : true,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  _buildAutocomplete(
+                    label  : '断面形状',
+                    hint   : '開渠 / BOX / 円形',
+                    initial: '---',
+                    options: _kShapeOptions,
+                    display: (o) => _kShapeLabels[o] ?? o,
+                    filter : (o, v) =>
+                        o.toLowerCase().contains(v.toLowerCase()) ||
+                        (_kShapeLabels[o] ?? '').contains(v),
+                    ctrl   : shapeCtrl,
+                  ),
+                  const SizedBox(height: 14),
+                  _buildAutocomplete(
+                    label  : '口径',
+                    hint   : '300×300 など',
+                    initial: '---',
+                    options: _kDiameterOptions,
+                    display: (o) => o,
+                    filter : (o, v) => o.contains(v),
+                    ctrl   : diamCtrl,
+                  ),
+                  const SizedBox(height: 14),
+                  TextField(
+                    controller: memCtrl,
+                    maxLines  : 2,
+                    decoration: const InputDecoration(
+                      labelText: 'メモ',
+                      border   : OutlineInputBorder(),
+                      isDense  : true,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child    : const Text('キャンセル'),
+            ),
+            FilledButton(
+              onPressed: () {
+                _saveStateForUndo();
+                final shape    = shapeCtrl.text.trim().isEmpty ? '---' : shapeCtrl.text.trim();
+                final diameter = diamCtrl.text.trim().isEmpty  ? '---' : diamCtrl.text.trim();
+                final memo     = memCtrl.text.trim();
+                setState(() {
+                  layer.gutters.add(Gutter(
+                    id      : 'SG-00$_newGutterCounter',
+                    name    : nameCtrl.text,
+                    shape   : shape,
+                    diameter: diameter,
+                    memo    : memo,
+                    points  : List.from(newPoints),
+                    properties: {
+                      'shape'   : shape,
+                      'diameter': diameter,
+                      'memo'    : memo,
+                      'name'    : nameCtrl.text,
+                    },
+                  ));
+                  _newGutterCounter++;
+                  newPoints.clear();
+                  // isAddingNew = false; // モードを維持して続けて追加できるようにする
+                });
+                _saveToLocalStorage();
+                _showSnackBar('「${layer.name}」に追加しました。続けてタップで次の路線を追加できます。');
+                Navigator.pop(ctx);
+              },
+              child: const Text('保存'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child    : const Text('キャンセル'),
-          ),
-          FilledButton(
-            onPressed: () {
-              _saveStateForUndo();
-              setState(() {
-                layer.gutters.add(Gutter(
-                  id    : 'SG-00$_newGutterCounter',
-                  name  : ctrl.text,
-                  points: List.from(newPoints),
-                ));
-                _newGutterCounter++;
-                newPoints.clear();
-                // isAddingNew = false; // モードを維持して続けて追加できるようにする
-              });
-              _saveToLocalStorage();
-              _showSnackBar('「${layer.name}」に追加しました。続けてタップで次の路線を追加できます。');
-              Navigator.pop(ctx);
-            },
-            child: const Text('保存'),
-          ),
-        ],
       ),
     );
   }
@@ -1641,6 +1695,232 @@ class _MapPageState extends State<MapPage> {
     );
   }
 
+  // ================================================================
+  // 複数選択モード
+  // ================================================================
+
+  void _toggleMultiSelect() {
+    setState(() {
+      _isMultiSelect = !_isMultiSelect;
+      if (!_isMultiSelect) _selectedGutterIds.clear();
+    });
+  }
+
+  /// 選択中の Gutter をすべてのレイヤから収集する
+  List<({Gutter gutter, GutterLayer layer, int layerIdx, int gutterIdx})>
+      _getSelectedGutters() {
+    final result = <({Gutter gutter, GutterLayer layer, int layerIdx, int gutterIdx})>[];
+    for (int li = 0; li < layers.length; li++) {
+      final layer = layers[li];
+      for (int gi = 0; gi < layer.gutters.length; gi++) {
+        final g = layer.gutters[gi];
+        if (_selectedGutterIds.contains(g.id)) {
+          result.add((gutter: g, layer: layer, layerIdx: li, gutterIdx: gi));
+        }
+      }
+    }
+    return result;
+  }
+
+  void _showBulkEditDialog() {
+    if (_selectedGutterIds.isEmpty) {
+      _showSnackBar('ラインが選択されていません');
+      return;
+    }
+
+    // 編集対象
+    final selected = _getSelectedGutters();
+    final count    = selected.length;
+
+    // 各フィールド：null = 変更なし
+    String? bulkShape;
+    String? bulkDiameter;
+    String? bulkMemo;
+    bool?   bulkShowArrow;
+    bool?   bulkShowHeadMark;
+    GutterLayer? bulkLayer;
+
+    // 値が全選択で統一されているか確認してプレースホルダ表示用
+    final shapes    = selected.map((e) => e.gutter.shape).toSet();
+    final diams     = selected.map((e) => e.gutter.diameter).toSet();
+    final memos     = selected.map((e) => e.gutter.memo).toSet();
+    final initShape = shapes.length    == 1 ? shapes.first    : null;
+    final initDiam  = diams.length     == 1 ? diams.first     : null;
+    final initMemo  = memos.length     == 1 ? memos.first     : null;
+
+    final shapeCtrl = TextEditingController(text: initShape ?? '');
+    final diamCtrl  = TextEditingController(text: initDiam  ?? '');
+    final memoCtrl  = TextEditingController(text: initMemo  ?? '');
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => AlertDialog(
+          title: Text('一括編集（$count件選択中）'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '入力したフィールドのみ変更されます。\n空欄のフィールドは変更されません。',
+                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+                  const SizedBox(height: 14),
+
+                  // 断面形状
+                  _buildAutocomplete(
+                    label  : '断面形状',
+                    hint   : initShape != null ? initShape! : '（複数の値）',
+                    initial: initShape ?? '',
+                    options: _kShapeOptions,
+                    display: (o) => _kShapeLabels[o] ?? o,
+                    filter : (o, v) =>
+                        o.toLowerCase().contains(v.toLowerCase()) ||
+                        (_kShapeLabels[o] ?? '').contains(v),
+                    ctrl   : shapeCtrl,
+                  ),
+                  const SizedBox(height: 12),
+
+                  // 口径
+                  _buildAutocomplete(
+                    label  : '口径',
+                    hint   : initDiam != null ? initDiam! : '（複数の値）',
+                    initial: initDiam ?? '',
+                    options: _kDiameterOptions,
+                    display: (o) => o,
+                    filter : (o, v) => o.contains(v),
+                    ctrl   : diamCtrl,
+                  ),
+                  const SizedBox(height: 12),
+
+                  // メモ
+                  TextField(
+                    controller: memoCtrl,
+                    maxLines  : 2,
+                    decoration: InputDecoration(
+                      labelText: 'メモ',
+                      hintText : initMemo != null ? initMemo! : '（複数の値）',
+                      border   : const OutlineInputBorder(),
+                      isDense  : true,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+
+                  // 流向矢印
+                  const Text('流向矢印', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                  Row(
+                    children: [
+                      ChoiceChip(
+                        label   : const Text('変更なし'),
+                        selected: bulkShowArrow == null,
+                        onSelected: (_) => setS(() => bulkShowArrow = null),
+                      ),
+                      const SizedBox(width: 6),
+                      ChoiceChip(
+                        label   : const Text('ON'),
+                        selected: bulkShowArrow == true,
+                        onSelected: (_) => setS(() => bulkShowArrow = true),
+                      ),
+                      const SizedBox(width: 6),
+                      ChoiceChip(
+                        label   : const Text('OFF'),
+                        selected: bulkShowArrow == false,
+                        onSelected: (_) => setS(() => bulkShowArrow = false),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+
+                  // 最上流マーク
+                  const Text('最上流マーク', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                  Row(
+                    children: [
+                      ChoiceChip(
+                        label   : const Text('変更なし'),
+                        selected: bulkShowHeadMark == null,
+                        onSelected: (_) => setS(() => bulkShowHeadMark = null),
+                      ),
+                      const SizedBox(width: 6),
+                      ChoiceChip(
+                        label   : const Text('ON'),
+                        selected: bulkShowHeadMark == true,
+                        onSelected: (_) => setS(() => bulkShowHeadMark = true),
+                      ),
+                      const SizedBox(width: 6),
+                      ChoiceChip(
+                        label   : const Text('OFF'),
+                        selected: bulkShowHeadMark == false,
+                        onSelected: (_) => setS(() => bulkShowHeadMark = false),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+
+                  // レイヤ移動
+                  const Text('レイヤ移動', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                  DropdownButtonFormField<GutterLayer>(
+                    value      : bulkLayer,
+                    hint       : const Text('変更なし'),
+                    isExpanded : true,
+                    decoration : const InputDecoration(
+                      border : OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                    items: layers.map((l) => DropdownMenuItem(
+                      value: l,
+                      child: Text(l.name),
+                    )).toList(),
+                    onChanged: (v) => setS(() => bulkLayer = v),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child    : const Text('キャンセル'),
+            ),
+            FilledButton(
+              onPressed: () {
+                _saveStateForUndo();
+                final newShape    = shapeCtrl.text.trim().isNotEmpty ? shapeCtrl.text.trim() : null;
+                final newDiameter = diamCtrl.text.trim().isNotEmpty  ? diamCtrl.text.trim()  : null;
+                final newMemo     = memoCtrl.text.trim().isNotEmpty  ? memoCtrl.text.trim()  : null;
+
+                setState(() {
+                  for (final s in selected) {
+                    final g = s.gutter;
+                    if (newShape    != null) { g.shape    = newShape;    g.properties['shape']    = newShape; }
+                    if (newDiameter != null) { g.diameter = newDiameter; g.properties['diameter'] = newDiameter; }
+                    if (newMemo     != null) { g.memo     = newMemo;     g.properties['memo']     = newMemo; }
+                    if (bulkShowArrow    != null) g.showArrow    = bulkShowArrow!;
+                    if (bulkShowHeadMark != null) g.showHeadMark = bulkShowHeadMark!;
+
+                    // レイヤ移動
+                    if (bulkLayer != null && bulkLayer != s.layer) {
+                      s.layer.gutters.remove(g);
+                      bulkLayer!.gutters.add(g);
+                    }
+                  }
+                  _selectedGutterIds.clear();
+                  _isMultiSelect = false;
+                });
+                _saveToLocalStorage();
+                Navigator.pop(ctx);
+                _showSnackBar('$count件を一括編集しました');
+              },
+              child: const Text('適用'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _compactSwitch({
     required String label,
     required bool value,
@@ -1751,7 +2031,9 @@ class _MapPageState extends State<MapPage> {
           distanceFilter: 10,
         ),
       );
-      _mapController.move(LatLng(pos.latitude, pos.longitude), 17.0);
+      final latlng = LatLng(pos.latitude, pos.longitude);
+      setState(() => _currentPosition = latlng);
+      _mapController.move(latlng, 17.0);
     } catch (e) {
       _showSnackBar('位置情報取得失敗: $e');
     }
@@ -2077,7 +2359,7 @@ class _MapPageState extends State<MapPage> {
   }
 
   // ================================================================
-  // 一括スタイル変更（レイヤ内の全路線）
+  // 一括スタイル変更（レイヤー内の全路線）
   // ================================================================
 
   void _showBulkStyleDialog(int layerIndex) {
@@ -2456,7 +2738,7 @@ class _MapPageState extends State<MapPage> {
                   ? '削除モード'
                   : isStamp2Pt
                       ? '勾配矢印モード（${_stamp2PtFirst == null ? "1点目をタップ" : "2点目をタップ"}）'
-                      : '現場踏査GIS',
+                      : '側溝踏査マップ',
       style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
     ),
     bottom: (!isAddingNew && !isCutting && !isDeleting && !isStamp2Pt)
@@ -2605,7 +2887,7 @@ class _MapPageState extends State<MapPage> {
         bottom: 24,
         child : _buildFabColumn(),
       ),
-      // 左下：選択中レイヤバッジ（常時表示）
+      // 左下：選択中レイヤーバッジ（常時表示）
       Positioned(
         left  : 12,
         bottom: 24,
@@ -2648,6 +2930,22 @@ class _MapPageState extends State<MapPage> {
           )).toList(),
         ),
       ),
+      // 複数選択ハイライト
+      if (_isMultiSelect && _selectedGutterIds.isNotEmpty)
+        PolylineLayer(
+          polylines: [
+            for (final layer in layers)
+              for (final g in layer.gutters)
+                if (_selectedGutterIds.contains(g.id))
+                  Polyline(
+                    points     : g.points,
+                    color      : Colors.indigo.withValues(alpha: 0.7),
+                    strokeWidth: _scaledStrokeWidth(g.strokeWidth + 5),
+                    borderStrokeWidth: _scaledStrokeWidth(3),
+                    borderColor: Colors.white,
+                  ),
+          ],
+        ),
       if (isAddingNew && newPoints.isNotEmpty)
         PolylineLayer(
           polylines: [
@@ -2670,6 +2968,8 @@ class _MapPageState extends State<MapPage> {
             if (layer.visible)
               for (final stamp in layer.stamps)
                 _buildStampMarker(stamp, layer),
+          if (_currentPosition != null)
+            _buildCurrentPositionMarker(_currentPosition!),
         ],
       ),
     ],
@@ -2722,8 +3022,23 @@ class _MapPageState extends State<MapPage> {
     );
   }
 
+  /// 現在地ピンマーカー（📍型、ズーム連動サイズ）
+  Marker _buildCurrentPositionMarker(LatLng position) {
+    final fontSize   = _scaledStampFontSize();
+    final markerSize = fontSize + 12;
+    return Marker(
+      point : position,
+      width : markerSize,
+      height: markerSize,
+      child : Text(
+        '📍',
+        style: TextStyle(fontSize: fontSize),
+        textAlign: TextAlign.center,
+      ),
+    );
+  }
+
   // ================================================================
-  // 勾配矢印スタンプ編集ボトムシート（角度調整・削除）
   // ================================================================
 
   void _showStampEditSheet(ArrowStamp stamp, GutterLayer layer) {
@@ -2880,7 +3195,7 @@ class _MapPageState extends State<MapPage> {
 
   Widget _buildLayerBadge() {
     final layer = _currentLayer;
-    // レイヤなし・未選択
+    // レイヤーなし・未選択
     final label  = layer != null ? layer.name : 'レイヤ未選択';
     final isNone = layer == null;
 
@@ -2992,6 +3307,29 @@ class _MapPageState extends State<MapPage> {
           iconColor: isStamp2Pt ? Colors.white : Colors.teal.shade700,
           mini: true,
         ),
+        const SizedBox(height: 6),
+
+        // 複数選択モード
+        _roundFab(
+          icon     : Icons.checklist,
+          tooltip  : _isMultiSelect ? '選択モード終了' : '複数選択',
+          onTap    : _toggleMultiSelect,
+          color    : _isMultiSelect ? Colors.indigo : Colors.white,
+          iconColor: _isMultiSelect ? Colors.white  : Colors.indigo,
+          mini     : true,
+        ),
+
+        // 複数選択中：一括編集ボタン
+        if (_isMultiSelect && _selectedGutterIds.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          _roundFab(
+            icon     : Icons.edit_note,
+            tooltip  : '一括編集（${_selectedGutterIds.length}件）',
+            onTap    : _showBulkEditDialog,
+            color    : Colors.indigo.shade700,
+            iconColor: Colors.white,
+          ),
+        ],
 
         // 追加モード中は「保存」ボタンも表示
         if (isAddingNew) ...[
