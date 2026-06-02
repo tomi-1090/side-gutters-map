@@ -1,0 +1,59 @@
+name: Flutter Web Build & Deploy to Vercel
+
+on:
+  push:
+    branches:
+      - main        # mainブランチへのpushで自動デプロイ
+  workflow_dispatch: # 手動実行も可能
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ① リポジトリをチェックアウト
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ② Flutter SDKをセットアップ
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 'stable'
+          channel: 'stable'
+          cache: true
+
+      # ③ 依存パッケージを取得
+      - name: Get Flutter dependencies
+        run: flutter pub get
+
+      # ④ Flutter Webビルド
+      - name: Build Flutter Web
+        run: flutter build web --release --web-renderer canvaskit
+
+      # ⑤ Vercel CLIをインストール
+      - name: Install Vercel CLI
+        run: npm install -g vercel@latest
+
+      # ⑥ api/フォルダをbuild/webにコピー
+      #    （VercelのServerless FunctionsをFlutterのビルド出力と一緒にデプロイするため）
+      - name: Copy api folder to build output
+        run: cp -r api build/web/api
+
+      # ⑦ vercel.jsonをbuild/webにコピー（存在する場合）
+      - name: Copy vercel.json if exists
+        run: |
+          if [ -f vercel.json ]; then
+            cp vercel.json build/web/vercel.json
+          fi
+
+      # ⑧ Vercelにデプロイ
+      - name: Deploy to Vercel
+        working-directory: build/web
+        run: |
+          vercel deploy --prod \
+            --token=${{ secrets.VERCEL_TOKEN }} \
+            --yes
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
